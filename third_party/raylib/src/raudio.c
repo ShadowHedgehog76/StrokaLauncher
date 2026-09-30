@@ -480,6 +480,9 @@ void InitAudioDevice(void)
     config.capture.channels = 1;
     config.sampleRate = AUDIO_DEVICE_SAMPLE_RATE;
     config.dataCallback = OnSendAudioDataToDevice;
+    // Stroka : périodes plus longues (musique de fond, la latence n'a pas d'importance) : pas de grésillement
+    // quand le système est chargé (PulseAudio / PipeWire notamment)
+    config.performanceProfile = ma_performance_profile_conservative;
     config.pUserData = NULL;
 
     result = ma_device_init(&AUDIO.System.context, &config, &AUDIO.System.device);

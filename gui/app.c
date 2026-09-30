@@ -3344,6 +3344,9 @@ static void update_music(const snapshot *s) {
                 MU.audio_ready = IsAudioDeviceReady() ? 1 : -1;
             }
             if (MU.audio_ready == 1) {
+                /* tampons d'une demi-seconde (au lieu de ~33 ms) : une image lente ne vide plus le tampon, donc
+                 * pas de grésillement pendant un chargement */
+                SetAudioStreamBufferSizeDefault(22050);
                 MU.m = LoadMusicStream(path);
                 if (IsMusicValid(MU.m)) {
                     MU.m.looping = true;
