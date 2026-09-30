@@ -72,6 +72,17 @@ jamais la clé `service_role` / `sb_secret_…`). Le schéma de la base est dans
   - un pack peut les **bloquer** :
     le dossier `mods` reste alors identique au pack (mods perso retirés, `.jar` déposés à la main mis de
     côté dans `.stroka/mods-desactives` et remis en place si l'option est réactivée).
+- **Importer une ancienne installation** (Réglages → *Importer depuis un autre launcher*) : les instances
+  Prism (y compris Flatpak), Modrinth App, CurseForge, GDLauncher et le launcher officiel sont détectées
+  automatiquement ; sinon, on choisit le dossier de l'instance. Le pack est d'abord synchronisé (ses mods
+  et ses configs restent les siens), puis sont copiés au choix :
+  - touches, options et serveurs (`options*.txt`, `servers.dat`, `hotbar.nbt`) ; si le pack fournit un
+    `options.txt`, les réglages du joueur y sont fusionnés (sauf la liste des packs de ressources du pack) ;
+  - mondes (`saves/`), données et réglages des mods (`config/`, cartes JourneyMap / Xaero, schémas…),
+    packs de ressources et shaders, captures d'écran ;
+  - en option, les mods de l'ancienne instance absents du pack deviennent des mods perso de ce pack.
+  Jamais copiés : `mods/`, logs, rapports de plantage, fichiers du launcher d'origine, menus FancyMenu si
+  le pack a les siens. L'instance d'origine n'est pas modifiée.
 - Configs : installées si absentes, mises à jour seulement quand le pack les modifie (les réglages du
   joueur sont gardés sinon).
 - Mises à jour : quand un pack change, les joueurs voient une pastille de
@@ -98,7 +109,7 @@ jamais la clé `service_role` / `sb_secret_…`). Le schéma de la base est dans
 (+ `STROKA_SHOT_FRAME`), `STROKA_SCRIPT="60:x,y;90:x,y"` (clics simulés pour les tests d'interface) et
 `STROKA_JVM_ARGS` (arguments Java supplémentaires au lancement du jeu), `STROKA_UPDATE_API` (autre source
 pour la vérification des mises à jour, ex : `file:///…/latest.json`), `STROKA_UM_SEARCH=…` (recherche
-pré-remplie dans « Mes mods », pour les captures).
+pré-remplie dans « Mes mods », pour les captures), `STROKA_PAGE=import` (fenêtre d'import ouverte).
 
 
 ## Code
@@ -112,6 +123,7 @@ pré-remplie dans « Mes mods », pour les captures).
 | `src/pack.c`, `src/sync.c` | modèle de pack, synchronisation des fichiers, `servers.dat` |
 | `src/updater.c` | mise à jour automatique du launcher (releases GitHub) |
 | `src/platform.c`, `src/zip.c` | code propre à chaque système (processus, fenêtres de choix, dossiers), lecture des .jar |
+| `src/migrate.c` | import d'une instance Prism / Modrinth / CurseForge / GDLauncher / officielle |
 | `src/usermods.c` | mods ajoutés par le joueur : liste, recherche Modrinth, installation au lancement |
 | `src/supabase.c` | API REST / Auth / Storage |
 | `src/auth.c` | Microsoft (code appareil) → Xbox Live → XSTS → Minecraft |

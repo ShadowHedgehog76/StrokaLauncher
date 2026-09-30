@@ -16,6 +16,7 @@
 #include "config.h"
 #include "game.h"
 #include "http.h"
+#include "migrate.h"
 #include "modmeta.h"
 #include "pack.h"
 #include "ping.h"
@@ -40,7 +41,7 @@
 #define MAX_PACKS 64
 
 typedef enum { PAGE_HOME, PAGE_MODS, PAGE_SETTINGS } page_t;
-typedef enum { TASK_IDLE, TASK_LOGIN, TASK_PLAY } task_t;
+typedef enum { TASK_IDLE, TASK_LOGIN, TASK_PLAY, TASK_IMPORT } task_t;
 
 /* ---------- état partagé avec les threads de travail ---------- */
 
@@ -91,6 +92,8 @@ static struct {
     mod_meta *meta_res;
     int meta_n, meta_gen, meta_ready;
     int task_no_launch; /* la tâche en cours est une simple mise à jour */
+    mig_result mig_res; /* résultat du dernier import */
+    char mig_name[160];
 } S = {.mu = PTHREAD_MUTEX_INITIALIZER};
 
 static account g_acc;
@@ -150,6 +153,10 @@ static struct {
     float um_lscroll, um_rscroll, settings_scroll;
     /* changement de pack : défilement vertical de l'ancien vers le nouveau */
     int prev_sel, switch_dir;
+    /* fenêtre « Importer une installation » */
+    int mig_open, mig_sel, mig_what;
+    mig_list mig;
+    float mig_scroll;
     float switch_t; /* temps écoulé depuis le changement (avancé image par image : un blocage ne saute pas l'animation) */
 } U;
 
@@ -273,6 +280,26 @@ static void *play_thread(void *arg) {
     return NULL;
 }
 
+typedef struct {
+    pack p;
+    mig_source src;
+    int what;
+} import_job;
+
+static void *import_thread(void *arg) {
+    import_job *job = arg;
+    mig_result res;
+    int rc = migrate_import(&job->p, &job->src, job->what, &res);
+    LOCK();
+    S.mig_res = res;
+    snprintf(S.mig_name, sizeof S.mig_name, "%s", job->src.name);
+    UNLOCK();
+    pack_free(&job->p);
+    free(job);
+    finish_task(rc == 0);
+    return NULL;
+}
+
 /* Chemin local d'une image distante (cache) */
 static char *image_cache_path(const char *url) {
     char h[41];
@@ -386,6 +413,27 @@ static int start_task(task_t task, int no_launch) {
         UNLOCK();
         spawn(play_thread, job);
     }
+    return 0;
+}
+
+/* Import d'une ancienne installation dans le pack affiché */
+static int start_import(const mig_source *src, int what) {
+    LOCK();
+    if (S.task != TASK_IDLE || S.game_running) {
+        UNLOCK();
+        return -1;
+    }
+    S.task = TASK_IMPORT;
+    S.cancel = 0;
+    S.status[0] = '\0';
+    S.ptotal = 0;
+    S.task_no_launch = 0;
+    UNLOCK();
+    import_job *job = calloc(1, sizeof *job);
+    pack_copy(&job->p, current_pack());
+    job->src = *src;
+    job->what = what;
+    spawn(import_thread, job);
     return 0;
 }
 
@@ -1422,7 +1470,7 @@ static void draw_bar_content(const snapshot *s, int idx) {
 
     float px = bar.x + 262, pw = nx - 32 - px;
     DrawRectangle((int)px - 14, (int)bar.y + 20, 1, 44, C_BORDER);
-    if (s->task == TASK_PLAY && !s->game_running) {
+    if ((s->task == TASK_PLAY || s->task == TASK_IMPORT) && !s->game_running) {
         float target = s->ptotal ? (float)s->pdone / (float)s->ptotal : 0;
         U.progress_smooth += (target - U.progress_smooth) * fminf(1, GetFrameTime() * 10);
         if (target < U.progress_smooth) U.progress_smooth = target;
@@ -1461,10 +1509,11 @@ static void draw_bar_content(const snapshot *s, int idx) {
     if (s->game_running) label = "EN JEU";
     else if (s->task == TASK_PLAY) label = s->no_launch ? "MISE À JOUR…" : "LANCEMENT…";
     else if (s->task == TASK_LOGIN) label = "CONNEXION…";
+    else if (s->task == TASK_IMPORT) label = "IMPORT…";
     else if (!logged) label = "SE CONNECTER";
     else label = has_update(idx) ? "METTRE À JOUR" : "JOUER";
 
-    if (s->task == TASK_PLAY && !s->game_running) {
+    if ((s->task == TASK_PLAY || s->task == TASK_IMPORT) && !s->game_running) {
         pill_gradient(play, (Color){70, 60, 80, 255}, (Color){60, 52, 74, 255});
         spinner((Vector2){play.x + 40, play.y + 28}, 11, ui_time, WHITE);
         text_center(F.bold, label, (Rectangle){play.x + 20, play.y, play.width - 20, play.height}, 17, C_TEXT);
@@ -1594,7 +1643,7 @@ static void icon_back_fn(Vector2 c, float s, Color col) {
 static void page_header(const char *title, const char *subtitle, float oy) {
     float x = SIDEBAR_W + 56;
     float bw = nav_pill_width("Accueil");
-    if (nav_pill("page-back", (Rectangle){x, 88 + oy, bw, 40}, icon_back_fn, "Accueil", 1) || (IsKeyPressed(KEY_ESCAPE) && !U.login_open && !U.um_open))
+    if (nav_pill("page-back", (Rectangle){x, 88 + oy, bw, 40}, icon_back_fn, "Accueil", 1) || (IsKeyPressed(KEY_ESCAPE) && !U.login_open && !U.um_open && !U.mig_open))
         set_page(PAGE_HOME);
     text_fit(F.bold, title, x + bw + 20, 82 + oy, 34, 560, C_TEXT);
     text_fit(F.regular, subtitle, x + 2, 142 + oy, 15, 760, C_MUTED);
@@ -2021,6 +2070,186 @@ static void draw_user_mods_modal(float appear) {
         U.um_open = 0;
 }
 
+/* ---------- fenêtre « Importer une installation » ---------- */
+
+static int mig_matches(const mig_source *m, const pack *p) {
+    return p && m->mc[0] && strcmp(m->mc, p->mc_version) == 0 && (!m->loader[0] || strcmp(m->loader, p->loader) == 0);
+}
+
+static void open_import(void) {
+    const pack *p = current_pack();
+    if (!p) return;
+    migrate_list_free(&U.mig);
+    migrate_find(&U.mig);
+    U.mig_sel = U.mig.n ? 0 : -1;
+    for (int i = 0; i < U.mig.n; i++)
+        if (mig_matches(&U.mig.v[i], p)) {
+            U.mig_sel = i; /* la plus récente avec la même version que le pack */
+            break;
+        }
+    U.mig_what = MIG_ALL;
+    U.mig_scroll = 0;
+    U.mig_open = 1;
+}
+
+/* Dossier choisi à la main : ajouté en tête de liste et sélectionné */
+static void import_pick_folder(void) {
+    char *path = sys_pick(PICK_FOLDER, "Dossier de l'instance à importer");
+    if (!path) return;
+    mig_source src;
+    if (migrate_probe(path, &src) != 0) {
+        ui_toast(2, "%s", last_error());
+        free(path);
+        return;
+    }
+    free(path);
+    for (int i = 0; i < U.mig.n; i++)
+        if (strcmp(U.mig.v[i].dir, src.dir) == 0) {
+            U.mig_sel = i;
+            return;
+        }
+    U.mig.v = realloc(U.mig.v, (size_t)(U.mig.n + 1) * sizeof *U.mig.v);
+    memmove(U.mig.v + 1, U.mig.v, (size_t)U.mig.n * sizeof *U.mig.v);
+    U.mig.v[0] = src;
+    U.mig.n++;
+    U.mig_sel = 0;
+    U.mig_scroll = 0;
+}
+
+static Color launcher_color(const char *l) {
+    if (strcmp(l, "Prism") == 0) return (Color){110, 200, 120, 255};
+    if (strcmp(l, "Modrinth") == 0) return (Color){27, 217, 106, 255};
+    if (strcmp(l, "CurseForge") == 0) return (Color){241, 100, 54, 255};
+    if (strcmp(l, "GDLauncher") == 0) return (Color){130, 150, 255, 255};
+    if (strcmp(l, "Officiel") == 0) return C_MUTED;
+    return (Color){120, 170, 255, 255};
+}
+
+static void draw_import_modal(const snapshot *s, float appear) {
+    DrawRectangle(0, 0, WIN_W, WIN_H, with_alpha((Color){4, 4, 10, 255}, 0.72f * appear));
+    float w = 960, h = 588;
+    Rectangle card = {(WIN_W - w) / 2, (WIN_H - h) / 2 + 12 + (1 - ui_ease_out(appear)) * 30, w, h};
+    glow(card, 26, with_alpha(C_ACCENT, 0.3f), 0, 40);
+    rrect(card, 26, (Color){20, 18, 32, 252});
+    rrect_lines(card, 26, 1, C_BORDER);
+    const pack *p = current_pack();
+    if ((appear < 0.99f && !U.mig_open) || !p) {
+        if (!p) U.mig_open = 0;
+        return;
+    }
+
+    text(F.bold, "Importer une ancienne installation", card.x + 32, card.y + 26, 24, C_TEXT);
+    char sub[240];
+    snprintf(sub, sizeof sub, "Vers %s : tes touches, tes mondes et les réglages de tes mods. Les mods et configs du pack restent ceux du pack.",
+             p->name);
+    text_fit(F.medium, sub, card.x + 32, card.y + 60, 13, w - 64, C_MUTED);
+
+    /* colonne gauche : installations trouvées */
+    float top = card.y + 96, bottom = card.y + h - 88;
+    Rectangle left = {card.x + 24, top, 540, bottom - top};
+    rrect(left, 18, (Color){14, 12, 24, 220});
+    rrect_lines(left, 18, 1, C_BORDER);
+    char lt[64];
+    snprintf(lt, sizeof lt, "Installations trouvées (%d)", U.mig.n);
+    text(F.bold, lt, left.x + 18, left.y + 16, 14, C_TEXT);
+    Rectangle view = {left.x + 8, left.y + 44, left.width - 16, left.height - 110};
+    const float row = 64;
+    float maxs = fmaxf(0, U.mig.n * row - view.height);
+    if (ui_mouse_in(view)) U.mig_scroll -= GetMouseWheelMove() * 40;
+    U.mig_scroll = fmaxf(0, fminf(U.mig_scroll, maxs));
+    if (!U.mig.n)
+        text_wrap(F.regular,
+                  "Aucune installation trouvée automatiquement (Prism, Modrinth, CurseForge, GDLauncher, launcher officiel). "
+                  "Choisis le dossier de ton instance : celui qui contient options.txt, ou .minecraft.",
+                  view.x + 10, view.y + 6, 13, view.width - 20, 20, 5, C_MUTED);
+    BeginScissorMode((int)view.x, (int)view.y, (int)view.width, (int)view.height);
+    for (int i = 0; i < U.mig.n; i++) {
+        const mig_source *m = &U.mig.v[i];
+        Rectangle r = {view.x, view.y + i * row - U.mig_scroll, view.width, row - 6};
+        if (r.y + r.height < view.y || r.y > view.y + view.height) continue;
+        int hot = ui_mouse_in(r) && CheckCollisionPointRec(ui_mouse_pos(), view);
+        int sel = i == U.mig_sel;
+        rrect(r, 12, sel ? with_alpha(C_ACCENT, 0.16f) : hot ? C_PANEL_HI : C_PANEL);
+        if (sel) rrect_lines(r, 12, 1, with_alpha(C_ACCENT, 0.7f));
+        if (hot) ui_hand();
+        if (hot && ui_clicked(r)) U.mig_sel = i;
+        /* pastille du launcher */
+        Color lc = launcher_color(m->launcher);
+        float bw = measure(F.semibold, m->launcher, 11).x + 18;
+        rrect((Rectangle){r.x + 12, r.y + 10, bw, 20}, 10, with_alpha(lc, 0.16f));
+        text(F.semibold, m->launcher, r.x + 21, r.y + 13, 11, lc);
+        text_fit(F.semibold, m->name, r.x + 20 + bw, r.y + 10, 15, r.width - bw - 150, C_TEXT);
+        char meta[200], ver[64] = "";
+        if (m->mc[0]) snprintf(ver, sizeof ver, "%s%s%s  ·  ", m->loader[0] ? loader_display(m->loader) : "", m->loader[0] ? " " : "", m->mc);
+        snprintf(meta, sizeof meta, "%s%d monde%s  ·  %d mod%s", ver, m->nsaves, m->nsaves > 1 ? "s" : "", m->nmods, m->nmods > 1 ? "s" : "");
+        text_fit(F.medium, meta, r.x + 14, r.y + 36, 12, r.width - 150, C_MUTED);
+        if (mig_matches(m, p)) {
+            const char *tag = "Même version";
+            float tw = measure(F.semibold, tag, 11).x + 18;
+            rrect((Rectangle){r.x + r.width - tw - 12, r.y + 19, tw, 22}, 11, with_alpha(C_OK, 0.14f));
+            text(F.semibold, tag, r.x + r.width - tw - 3, r.y + 23, 11, C_OK);
+        }
+    }
+    EndScissorMode();
+    if (ui_button("mig-dir", (Rectangle){left.x + 14, left.y + left.height - 58, left.width - 28, 44}, "Choisir un dossier…", icon_folder,
+                  BTN_GHOST, 1))
+        import_pick_folder();
+
+    /* colonne droite : quoi importer */
+    Rectangle right = {left.x + left.width + 20, top, card.x + w - 24 - (left.x + left.width + 20), bottom - top};
+    rrect(right, 18, (Color){14, 12, 24, 220});
+    rrect_lines(right, 18, 1, C_BORDER);
+    text(F.bold, "À importer", right.x + 18, right.y + 16, 14, C_TEXT);
+    static const struct {
+        int bit;
+        const char *label, *desc;
+    } OPTS[] = {
+        {MIG_OPTIONS, "Touches et options", "Raccourcis, vidéo, son, serveurs"},
+        {MIG_SAVES, "Mondes solo", "Le dossier saves"},
+        {MIG_MODDATA, "Données des mods", "Réglages, cartes, waypoints, schémas…"},
+        {MIG_RESOURCES, "Ressources et shaders", "resourcepacks, shaderpacks"},
+        {MIG_SCREENSHOTS, "Captures d'écran", "Le dossier screenshots"},
+        {MIG_EXTRA_MODS, "Mods hors du pack", "Ajoutés à tes mods perso de ce pack"},
+    };
+    for (int i = 0; i < 6; i++) {
+        float y = right.y + 48 + i * 54;
+        int blocked = OPTS[i].bit == MIG_EXTRA_MODS && !p->allow_user_mods;
+        int on = (U.mig_what & OPTS[i].bit) && !blocked;
+        text(F.semibold, OPTS[i].label, right.x + 18, y + 4, 14, blocked ? C_DIM : C_TEXT);
+        text_fit(F.regular, blocked ? "Mods perso bloqués par l'admin" : OPTS[i].desc, right.x + 18, y + 24, 12, right.width - 100,
+                 C_DIM);
+        char id[24];
+        snprintf(id, sizeof id, "mig-opt-%d", i);
+        if (ui_toggle(id, (Rectangle){right.x + right.width - 70, y + 6, 52, 30}, on) && !blocked) U.mig_what ^= OPTS[i].bit;
+    }
+
+    /* pied */
+    const mig_source *sel = U.mig_sel >= 0 && U.mig_sel < U.mig.n ? &U.mig.v[U.mig_sel] : NULL;
+    char note[260];
+    Color nc = C_DIM;
+    if (sel && sel->mc[0] && strcmp(sel->mc, p->mc_version) != 0) {
+        snprintf(note, sizeof note, "Version différente (%s → %s) : les mondes sont convertis à l'ouverture, garde une copie de secours.",
+                 sel->mc, p->mc_version);
+        nc = (Color){255, 170, 110, 255};
+    } else {
+        snprintf(note, sizeof note, "L'installation d'origine n'est pas modifiée. Les fichiers déjà présents dans ce pack sont remplacés.");
+    }
+    text_wrap(F.regular, note, card.x + 32, card.y + h - 66, 12, w - 440, 18, 2, nc);
+    int busy = s->task != TASK_IDLE || s->game_running;
+    if (ui_button("mig-cancel", (Rectangle){card.x + w - 32 - 160 - 12 - 150, card.y + h - 70, 150, 46}, "Annuler", NULL, BTN_GHOST, 1) ||
+        IsKeyPressed(KEY_ESCAPE))
+        U.mig_open = 0;
+    if (ui_button("mig-go", (Rectangle){card.x + w - 32 - 160, card.y + h - 70, 160, 46}, "Importer", icon_download, BTN_PRIMARY,
+                  sel && U.mig_what && !busy)) {
+        if (start_import(sel, U.mig_what) == 0) {
+            U.mig_open = 0;
+            set_page(PAGE_HOME);
+        } else {
+            ui_toast(2, "Ferme le jeu et attends la fin de la tâche en cours");
+        }
+    }
+}
+
 /* ---------- page Paramètres ---------- */
 
 static Rectangle section(float y, float h, const char *title, const char *desc) {
@@ -2037,9 +2266,9 @@ static void draw_settings(const snapshot *s, float oy) {
     page_header("Paramètres", "Règle le launcher et la mémoire allouée au jeu.", oy);
 
     /* contenu défilant sous l'en-tête */
-    const float view_top = 166, content_end = 800;
+    const float view_top = 166, content_end = 926;
     float max_scroll = fmaxf(0, content_end - WIN_H);
-    if (!U.um_open && !U.login_open && ui_mouse_pos().y > view_top) U.settings_scroll -= GetMouseWheelMove() * 40;
+    if (!U.um_open && !U.mig_open && !U.login_open && ui_mouse_pos().y > view_top) U.settings_scroll -= GetMouseWheelMove() * 40;
     U.settings_scroll = fmaxf(0, fminf(U.settings_scroll, max_scroll));
     oy -= U.settings_scroll;
     BeginScissorMode(0, (int)view_top, WIN_W, WIN_H - (int)view_top);
@@ -2130,7 +2359,19 @@ static void draw_settings(const snapshot *s, float oy) {
         if (U.um_open) cache_t = -10; /* relu à la fermeture de la fenêtre */
     }
 
-    r = section(638 + oy, 110, "Compte",
+    r = section(638 + oy, 110, "Importer depuis un autre launcher",
+                "Prism, Modrinth, CurseForge… : retrouve tes touches, tes mondes et les données de tes mods dans ce pack.");
+    {
+        const pack *cp = current_pack();
+        char lbl[96];
+        snprintf(lbl, sizeof lbl, "Importer dans %s", cp ? cp->name : "le pack");
+        float bw = fminf(320, measure(F.semibold, lbl, 15).x + 70);
+        if (ui_button("set-import", (Rectangle){r.x + r.width - 28 - bw, r.y + 32, bw, 44}, lbl, icon_download, BTN_GHOST,
+                      cp && s->task == TASK_IDLE && !s->game_running))
+            open_import();
+    }
+
+    r = section(764 + oy, 110, "Compte",
                 s->name[0] ? "Tes jetons de connexion sont stockés localement, lisibles uniquement par ton utilisateur."
                            : "Aucun compte connecté.");
     int busy = s->task != TASK_IDLE;
@@ -2164,7 +2405,7 @@ static void draw_settings(const snapshot *s, float oy) {
         if (st == 2) snprintf(line, sizeof line, "Stroka Launcher %s  ·  version %s disponible (bouton en haut à droite)", LAUNCHER_VERSION, v);
         else if (st == 1) snprintf(line, sizeof line, "Stroka Launcher %s  ·  à jour", LAUNCHER_VERSION);
         else snprintf(line, sizeof line, "Stroka Launcher %s", LAUNCHER_VERSION);
-        text(F.medium, line, SIDEBAR_W + 58, 638 + 110 + 22 + oy, 12, st == 2 ? C_ACCENT : C_DIM);
+        text(F.medium, line, SIDEBAR_W + 58, 764 + 110 + 22 + oy, 12, st == 2 ? C_ACCENT : C_DIM);
     }
     ui_layer = saved_layer;
     EndScissorMode();
@@ -2266,6 +2507,26 @@ static void handle_task_results(void) {
         ui_toast(2, "%s", error);
     } else if (task == TASK_PLAY && no_launch) {
         ui_toast(1, "Pack à jour : tu peux jouer !");
+    }
+    if (task == TASK_IMPORT) {
+        LOCK();
+        mig_result r = S.mig_res;
+        char from[160];
+        snprintf(from, sizeof from, "%s", S.mig_name);
+        UNLOCK();
+        if (!ok) {
+            ui_toast(2, "Import impossible : %s", error);
+        } else {
+            char extra[160] = "";
+            if (r.mods_added) snprintf(extra, sizeof extra, " · %d mod%s ajouté%s à tes mods", r.mods_added, r.mods_added > 1 ? "s" : "",
+                                       r.mods_added > 1 ? "s" : "");
+            else if (r.mods_left) snprintf(extra, sizeof extra, " · %d mod%s hors du pack non importé%s", r.mods_left,
+                                           r.mods_left > 1 ? "s" : "", r.mods_left > 1 ? "s" : "");
+            ui_toast(1, "%s importé : %d fichier%s (%.0f Mo)%s%s", from, r.files, r.files > 1 ? "s" : "", r.bytes / 1048576.0,
+                     r.options_merged ? " · touches fusionnées" : "", extra);
+        }
+        refresh_installed();
+        scan_mods();
     }
     if (task == TASK_PLAY) refresh_installed();
     if (task == TASK_PLAY) scan_mods();
@@ -2378,6 +2639,7 @@ int main(void) {
         snprintf(S.dev_uri, sizeof S.dev_uri, "https://www.microsoft.com/link");
     }
     int frame = 0, autoplay = dev_page && strcmp(dev_page, "play") == 0;
+    int dev_import = dev_page && strcmp(dev_page, "import") == 0; /* captures : fenêtre d'import ouverte */
 
     int quit = 0;
     while (!quit && !WindowShouldClose()) {
@@ -2407,6 +2669,11 @@ int main(void) {
         was_focused = focused;
         update_head_texture();
         handle_dropped_files();
+        if (dev_import && current_pack()) {
+            dev_import = 0;
+            U.page = PAGE_SETTINGS;
+            open_import();
+        }
         if (autoplay && current_pack()) {
             autoplay = 0;
             start_task(TASK_PLAY, 0);
@@ -2419,7 +2686,7 @@ int main(void) {
         }
 
         um_take_search();
-        ui_begin_frame(U.login_open || U.um_open);
+        ui_begin_frame(U.login_open || U.um_open || U.mig_open);
         BeginDrawing();
         ClearBackground(C_BG);
         /* fond animé : thème du pack affiché (l'ancien pack tant que son fond n'est pas sorti) */
@@ -2442,6 +2709,8 @@ int main(void) {
         if (U.login_open || appear > 0.02f) draw_login_modal(&s, appear);
         float um_appear = ui_anim("um-modal", U.um_open ? 1.0f : 0.0f, 12);
         if (!U.login_open && (U.um_open || um_appear > 0.02f)) draw_user_mods_modal(um_appear);
+        float mig_appear = ui_anim("mig-modal", U.mig_open ? 1.0f : 0.0f, 12);
+        if (!U.login_open && (U.mig_open || mig_appear > 0.02f)) draw_import_modal(&s, mig_appear);
         ui_layer = 0;
         ui_end_frame(WIN_W, TITLE_H);
 
