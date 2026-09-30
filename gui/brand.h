@@ -26,6 +26,10 @@ int brand_panel(const char *path, int w, int h);
 #define BRAND_STRIP_H 233
 int brand_scene_layers(const char *dir);
 
+/* Fond créé dans l'éditeur (cscene) en une bande raccordable pour les menus du jeu : blocs de `block` texels,
+ * éléments à leur position de départ, fond transparent. Taille de l'image dans *w, *h. 0 si OK. */
+int brand_custom_strip(const char *path, const void *custom_scene, int block, int *w, int *h);
+
 /* Textures globales des widgets Minecraft (1 texel = 1 pixel d'interface, découpe en 9 parties) :
  * boutons 200x20 (normal / survol / inactif), piste de curseur 200x20, poignée 8x20 (normal / survol). */
 typedef enum { GUI_BTN, GUI_BTN_HOVER, GUI_BTN_INACTIVE, GUI_SLIDER, GUI_HANDLE, GUI_HANDLE_HOVER, GUI_DIM, GUI_BTN_PRIMARY,

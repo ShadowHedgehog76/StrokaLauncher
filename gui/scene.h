@@ -35,6 +35,16 @@ unsigned scene_features_of_pack(const struct pack *p);  /* décor de tous les mo
 void scene_set_features(unsigned features);
 unsigned scene_get_features(void);
 
+/* Fond créé dans l'éditeur de l'admin : remplace le paysage (le ciel, les nuages et les particules restent ceux du
+ * thème courant, à régler sur son thème de base). NULL : paysage habituel. */
+void scene_set_custom(const void *custom_scene);
+const void *scene_get_custom(void);
+
+/* Ciel, astre et nuages seuls (sans paysage), et couleur de brume du thème courant (éditeur de fonds) */
+void scene_draw_backdrop(float t, float w, float h);
+#include "raylib.h"
+Color scene_fog(void);
+
 /* Calques séparés et raccordables (pour le fond animé des menus FancyMenu), en coordonnées « design »
  * (hauteur 700). period doit être un multiple de 180 (taille des blocs 12, 18 et 30). */
 void scene_draw_sky(float w, float h);

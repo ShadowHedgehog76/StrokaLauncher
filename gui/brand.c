@@ -9,6 +9,7 @@
 #include "draw.h"
 #include "raylib.h"
 #include "rlgl.h"
+#include "customscene.h"
 #include "scene.h"
 #include "util.h"
 
@@ -167,6 +168,23 @@ static void paint_layer(int w, int h, const void *ud) {
     else if (a->kind <= 4) scene_draw_layer_strip(a->kind - 2, dw, dh);
     else scene_draw_embers_strip(dw, dh);
     rlPopMatrix();
+}
+
+typedef struct {
+    const cscene *cs;
+} strip_args;
+
+static void paint_custom_strip(int w, int h, const void *ud) {
+    const cscene *cs = ((const strip_args *)ud)->cs;
+    cscene_draw_world(cs, 0, (float)w, (float)h, 0, 0, scene_fog());
+}
+
+int brand_custom_strip(const char *path, const void *custom_scene, int block, int *w, int *h) {
+    const cscene *cs = custom_scene;
+    *w = cs->w * block;
+    *h = cs->h * block;
+    strip_args a = {cs};
+    return render_png(path, *w, *h, paint_custom_strip, &a);
 }
 
 int brand_scene_layers(const char *dir) {

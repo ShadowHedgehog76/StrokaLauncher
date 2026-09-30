@@ -174,6 +174,33 @@ create policy "packs: admins suppriment" on storage.objects
     for delete to authenticated using (bucket_id = 'packs' and public.is_admin());
 
 -- ---------------------------------------------------------------------------
+-- Fonds animés créés dans l'éditeur de l'admin (un pack les utilise avec le thème « scene:<id> »)
+-- ---------------------------------------------------------------------------
+create table if not exists public.scenes (
+    id         uuid primary key default gen_random_uuid(),
+    name       text not null check (char_length(name) between 1 and 64),
+    data       jsonb not null,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+drop trigger if exists scenes_touch on public.scenes;
+create trigger scenes_touch before update on public.scenes
+    for each row execute function public.touch_updated_at();
+
+alter table public.scenes enable row level security;
+
+drop policy if exists "scenes: lecture" on public.scenes;
+create policy "scenes: lecture" on public.scenes for select to anon, authenticated using (true);
+
+drop policy if exists "scenes: écriture admin" on public.scenes;
+create policy "scenes: écriture admin" on public.scenes
+    for all to authenticated using (public.is_admin()) with check (public.is_admin());
+
+grant select on public.scenes to anon, authenticated;
+grant insert, update, delete on public.scenes to authenticated;
+
+-- ---------------------------------------------------------------------------
 -- Remplacement atomique de la liste des fichiers d'un pack (utilisé par l'app admin)
 -- ---------------------------------------------------------------------------
 create or replace function public.replace_pack_files(p_pack_id uuid, p_files jsonb)

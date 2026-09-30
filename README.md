@@ -78,6 +78,10 @@ jamais la clé `service_role` / `sb_secret_…`). Le schéma de la base est dans
   *Général* (nom, description, icône, loader et versions, fond animé avec aperçus) et onglet *Mods*
   (recherche Modrinth filtrée sur la version du pack, `.jar`, liste filtrable avec icônes). Enregistrés sur
   l'ordinateur (`local_packs.json`) ; suppression depuis la même page.
+- **Fonds créés dans l'éditeur** : un pack peut utiliser un fond fait dans l'éditeur de l'admin (thème
+  `scene:<id>`, table `scenes`) — grille de blocs qui défile en boucle, éléments animés (bateaux, trains,
+  avions, dirigeables, moulins…) sur le ciel d'un thème de base. Le launcher le télécharge avec la liste des
+  packs et le garde en cache (`cache/scenes/`).
 - **Joueurs en ligne** : un clic sur la carte « Joueurs en ligne » ouvre la liste des joueurs connectés au
   serveur du pack (avec leur tête de skin), d'après l'échantillon renvoyé par le serveur (12 au plus en vanilla).
 - **Recherche dans les mods** : barre de recherche sur la page Mods et dans « Mes mods » ; icônes Modrinth
@@ -141,6 +145,7 @@ pré-remplie dans « Mes mods », pour les captures), `STROKA_PAGE=import|solo|s
 | `src/pack.c`, `src/sync.c` | modèle de pack, synchronisation des fichiers, `servers.dat` |
 | `src/updater.c` | mise à jour automatique du launcher (releases GitHub) |
 | `src/platform.c`, `src/zip.c` | code propre à chaque système (processus, fenêtres de choix, dossiers), lecture des .jar |
+| `gui/customscene.c`, `src/scenes.c` | fonds de l'éditeur : format, dessin des blocs et éléments, téléchargement |
 | `src/localpacks.c`, `src/versions.c` | packs solo ; versions de Minecraft et des loaders |
 | `src/migrate.c` | import d'une instance Prism / Modrinth / CurseForge / GDLauncher / officielle |
 | `src/usermods.c` | mods ajoutés par le joueur : liste, recherche Modrinth, installation au lancement |

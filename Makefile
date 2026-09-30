@@ -44,10 +44,10 @@ endif
 LAUNCHER := StrokaLauncher$(EXE)
 CLI      := stroka-cli$(EXE)
 
-CORE_SRC := src/auth.c src/game.c src/http.c src/java.c src/localpacks.c src/migrate.c src/modmeta.c src/pack.c src/ping.c src/platform.c src/report.c \
+CORE_SRC := src/auth.c src/game.c src/http.c src/java.c src/localpacks.c src/migrate.c src/modmeta.c src/pack.c src/ping.c src/platform.c src/report.c src/scenes.c \
             src/settings.c src/skin.c src/supabase.c src/sync.c src/updater.c src/usermods.c src/util.c src/versions.c src/zip.c
 CJSON    := third_party/cjson/cJSON.c
-GUI_SRC  := gui/app.c gui/brand.c gui/draw.c gui/scene.c gui/ui.c
+GUI_SRC  := gui/app.c gui/brand.c gui/customscene.c gui/draw.c gui/scene.c gui/ui.c
 
 # Décodeur WebP (icônes des mods Modrinth), sans l'encodeur
 WEBP_DIR  := third_party/libwebp

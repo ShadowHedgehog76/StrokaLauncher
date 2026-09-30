@@ -15,6 +15,7 @@
 #include "brand.h"
 #include "config.h"
 #include "game.h"
+#include "customscene.h"
 #include "http.h"
 #include "localpacks.h"
 #include "migrate.h"
@@ -25,6 +26,7 @@
 #include "rlgl.h"
 #include "report.h"
 #include "scene.h"
+#include "scenes.h"
 #include "settings.h"
 #include "skin.h"
 #include "supabase.h"
@@ -86,6 +88,7 @@ static struct {
     char um_err[256];
     char packs_error[256];
     int images_version; /* incrémenté quand une image a été téléchargée */
+    int scenes_version; /* incrémenté quand les fonds de l'éditeur ont été téléchargés */
     ping_entry pings[MAX_PACKS];
     int npings;
     char ping_targets[MAX_PACKS][2][256]; /* slug, adresse */
@@ -341,6 +344,11 @@ static void *packs_thread(void *arg) {
     pack_list l;
     int rc = packs_fetch(&l, NULL);
     localpacks_append(&l); /* packs solo, après les packs en ligne */
+    if (scenes_fetch_for(&l) == 0) { /* fonds créés dans l'éditeur, utilisés par ces packs */
+        LOCK();
+        S.scenes_version++;
+        UNLOCK();
+    }
 
     /* Copie des URL d'images avant de céder la liste à l'interface */
     strvec urls = {0};
@@ -2842,6 +2850,8 @@ static Rectangle sp_field(const char *label, float x, float y, float w) {
 
 /* Aperçu animé d'un thème du fond, dans une vignette */
 static void draw_theme_preview(int theme, Rectangle r, float t) {
+    const void *saved_custom = scene_get_custom();
+    scene_set_custom(NULL);
     int saved = scene_get_theme();
     scene_set_theme(theme);
     float sc = r.width / 1180.0f;
@@ -2853,6 +2863,7 @@ static void draw_theme_preview(int theme, Rectangle r, float t) {
     rlPopMatrix();
     EndScissorMode();
     scene_set_theme(saved);
+    scene_set_custom(saved_custom);
 }
 
 /* Enregistre (ou crée) le pack solo de la page ; 0 si OK */
@@ -3405,6 +3416,39 @@ static const pack_file *pack_music(const pack *p) {
     return NULL;
 }
 
+/* ---------- fonds créés dans l'éditeur (thème « scene:<id> ») ---------- */
+
+static struct {
+    char id[40];
+    cscene s;
+    int ok;
+} CSC[16];
+static int NCSC, CSC_VERSION;
+
+/* Fond d'un thème « scene:<id> » (lu dans le cache), NULL pour un thème prédéfini ou un fond indisponible */
+static const cscene *custom_scene_for(const char *theme) {
+    const char *id = scene_id_of_theme(theme);
+    if (!id) return NULL;
+    LOCK();
+    int v = S.scenes_version;
+    UNLOCK();
+    if (v != CSC_VERSION) { /* fonds retéléchargés : relus depuis le cache */
+        for (int i = 0; i < NCSC; i++)
+            if (CSC[i].ok) cscene_free(&CSC[i].s);
+        NCSC = 0;
+        CSC_VERSION = v;
+    }
+    for (int i = 0; i < NCSC; i++)
+        if (strcmp(CSC[i].id, id) == 0) return CSC[i].ok ? &CSC[i].s : NULL;
+    if (NCSC >= 16) return NULL;
+    int i = NCSC++;
+    snprintf(CSC[i].id, sizeof CSC[i].id, "%s", id);
+    cJSON *d = scene_cached(id);
+    CSC[i].ok = d && cscene_from_json(d, &CSC[i].s) == 0;
+    cJSON_Delete(d);
+    return CSC[i].ok ? &CSC[i].s : NULL;
+}
+
 /* Couleur d'accent de l'interface selon le pack affiché : orange -> rouge en ligne, bleu -> bleu nuit en solo
  * (fondu entre les deux au changement de pack) */
 static void update_accent(void) {
@@ -3951,7 +3995,9 @@ int main(void) {
         /* fond animé : thème du pack affiché (l'ancien pack tant que son fond n'est pas sorti) */
         const pack *tp = current_pack();
         if (U.page == PAGE_HOME && U.switch_t < SW_OUT_END && U.prev_sel >= 0 && U.prev_sel < U.packs.n) tp = &U.packs.v[U.prev_sel];
-        scene_set_theme(tp ? scene_theme_find(tp->theme) : 0);
+        const cscene *cs = tp ? custom_scene_for(tp->theme) : NULL; /* fond créé dans l'éditeur */
+        scene_set_custom(cs);
+        scene_set_theme(cs ? scene_theme_find(cs->base) : tp ? scene_theme_find(tp->theme) : 0);
         scene_set_features(scene_features_of_pack(tp)); /* moulins, trains, dirigeables… selon les mods du pack */
         scene_draw(ui_time, WIN_W, WIN_H);
 

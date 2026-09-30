@@ -1,5 +1,7 @@
 #include "scene.h"
 
+#include "customscene.h"
+
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -119,6 +121,10 @@ int scene_get_theme(void) { return g_theme; }
 int scene_theme_particles_dir(void) { return THEMES[g_theme].particle_dir; }
 
 void scene_set_features(unsigned features) { g_features = features; }
+
+static const cscene *g_custom;
+void scene_set_custom(const void *custom_scene) { g_custom = custom_scene; }
+const void *scene_get_custom(void) { return g_custom; }
 unsigned scene_get_features(void) { return g_features; }
 
 /* Décor apporté par un mod, d'après le nom de son .jar */
@@ -802,6 +808,19 @@ static void draw_particle(const theme_t *T, const ember_t *e, float x, float y, 
     DrawRectangleRec((Rectangle){x, y, sz, sz}, with_alpha(T->particle, a));
 }
 
+/* Ciel, astre, nuages et particules du thème courant, sans paysage (zone d'édition des fonds) */
+void scene_draw_backdrop(float t, float w, float h) {
+    const theme_t *T = &THEMES[g_theme];
+    draw_sky(w, h, t, 1);
+    for (int i = 0; i < CLOUD_COUNT; i++) {
+        cloud_t *c = &clouds[i];
+        float span = w + 400;
+        draw_cloud(T, c, fmodf(c->x * span + t * c->speed, span) - 200, c->y * h);
+    }
+}
+
+Color scene_fog(void) { return THEMES[g_theme].haze[1]; }
+
 void scene_draw(float t, float w, float h) {
     const theme_t *T = &THEMES[g_theme];
     draw_sky(w, h, t, 1);
@@ -814,13 +833,19 @@ void scene_draw(float t, float w, float h) {
         draw_cloud(T, c, x, c->y * h);
     }
 
-    /* Engins volants (derrière le relief) */
-    if (g_features & SCENE_AERO) draw_aircraft(t, w, h);
+    if (g_custom) {
+        /* fond de l'éditeur : grille de blocs qui défile en boucle et ses éléments animés */
+        float b = h / g_custom->h;
+        cscene_draw_world(g_custom, t, w, h, t * g_custom->speed * b, 1, T->haze[1]);
+    } else {
+        /* Engins volants (derrière le relief) */
+        if (g_features & SCENE_AERO) draw_aircraft(t, w, h);
 
-    /* Paysage (viaduc entre la couche du milieu et celle de devant) */
-    for (int i = 0; i < 3; i++) {
-        draw_layer(&layers[i], i, t, w, h);
-        if (i == 1 && (g_features & (SCENE_TRAINS | SCENE_AERO))) draw_viaduct(t, w, h);
+        /* Paysage (viaduc entre la couche du milieu et celle de devant) */
+        for (int i = 0; i < 3; i++) {
+            draw_layer(&layers[i], i, t, w, h);
+            if (i == 1 && (g_features & (SCENE_TRAINS | SCENE_AERO))) draw_viaduct(t, w, h);
+        }
     }
 
     /* Particules */
