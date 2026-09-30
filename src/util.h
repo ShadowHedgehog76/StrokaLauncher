@@ -68,7 +68,7 @@ void sys_open(const char *path_or_url);           /* ouvre un dossier / fichier 
 char *self_exe_path(void);                        /* exécutable en cours, à libérer (NULL si inconnu) */
 int spawn_detached(char *const argv[]);           /* lance sans attendre (redémarrage) */
 
-enum { PICK_FOLDER, PICK_IMAGE, PICK_JAR };
+enum { PICK_FOLDER, PICK_IMAGE, PICK_JAR, PICK_AUDIO };
 char *sys_pick(int kind, const char *prompt);     /* fenêtre de choix du système ; chemin à libérer, NULL si annulé */
 
 /* Dossier de données du launcher (créé si besoin) */

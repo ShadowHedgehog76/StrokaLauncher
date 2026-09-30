@@ -142,8 +142,8 @@ int ui_button(const char *id, Rectangle r, const char *label, icon_fn icon, btn_
     Color fg = C_TEXT;
     if (style == BTN_PRIMARY) {
         if (enabled) glow(d, d.height / 2, C_ACCENT, 0, 16 + 8 * h);
-        Color a = enabled ? mix(C_ACCENT, (Color){255, 170, 60, 255}, h) : (Color){70, 70, 88, 255};
-        Color b = enabled ? mix(C_ACCENT2, (Color){255, 100, 140, 255}, h) : (Color){60, 60, 78, 255};
+        Color a = enabled ? mix(C_ACCENT, C_ACCENT_HI, h) : (Color){70, 70, 88, 255};
+        Color b = enabled ? mix(C_ACCENT2, C_ACCENT2_HI, h) : (Color){60, 60, 78, 255};
         pill_gradient(d, a, b);
         if (!enabled) fg = C_MUTED;
     } else if (style == BTN_DANGER) {
@@ -474,7 +474,7 @@ int ui_titlebar(float win_w, float height, float left_pad, const char *title, co
     int quit = 0;
     DrawRectangle(0, 0, (int)win_w, (int)height, (Color){6, 6, 12, 150});
     DrawRectangle(0, (int)height - 1, (int)win_w, 1, C_BORDER);
-    icon_cube((Vector2){left_pad / 2, height / 2}, 20, (Color){255, 170, 60, 255}, C_ACCENT, C_ACCENT2);
+    icon_cube((Vector2){left_pad / 2, height / 2}, 20, (Color){255, 170, 60, 255}, C_BRAND, C_BRAND2); /* logo : couleurs de la marque */
     Vector2 tm = measure_sp(F.bold, title, 15, 3);
     text_sp(F.bold, title, left_pad + 4, (height - 18) / 2, 15, 3, C_TEXT);
     if (subtitle) text_sp(F.medium, subtitle, left_pad + 16 + tm.x, (height - 18) / 2, 15, 3, C_MUTED);

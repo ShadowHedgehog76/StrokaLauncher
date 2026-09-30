@@ -1328,7 +1328,7 @@ static void draw_sidebar(void) {
     Rectangle tg = {bubble.x + pad, bubble.y + pad, size, 46};
     int thot = ui_mouse_in(tg);
     float th = ui_anim("pk-toggle", thot ? 1.0f : 0.0f, 16);
-    Color tc = solo ? (Color){120, 200, 150, 255} : C_ACCENT;
+    Color tc = solo ? (Color){88, 164, 255, 255} : C_BRAND;
     rrect(tg, radius, with_alpha(tc, 0.12f + 0.1f * th));
     rrect_lines(tg, radius, 1, with_alpha(tc, 0.35f + 0.3f * th));
     if (solo) icon_user((Vector2){tg.x + size / 2, tg.y + 17}, 17, tc);
@@ -1460,7 +1460,7 @@ typedef struct {
 typedef void (*card_icon)(Vector2 c);
 static float card_alpha = 1; /* opacité des cartes (transition entre packs) */
 static void card_icon_mods(Vector2 c) {
-    icon_cube(c, 24, with_alpha((Color){255, 170, 60, 255}, card_alpha), with_alpha(C_ACCENT, card_alpha), with_alpha(C_ACCENT2, card_alpha));
+    icon_cube(c, 24, with_alpha(C_ACCENT_HI, card_alpha), with_alpha(C_ACCENT, card_alpha), with_alpha(C_ACCENT2, card_alpha));
 }
 static void card_icon_ram(Vector2 c) { icon_chip(c, 24, with_alpha(C_ACCENT, card_alpha)); }
 static void card_icon_server(Vector2 c) {
@@ -1674,7 +1674,7 @@ static void draw_bar_content(const snapshot *s, int idx) {
         for (int i = 0; i < n; i++) {
             float cx = px + i * cw;
             text_sp(F.semibold, labels[i], cx, bar.y + 22, 10, 1.4f, C_DIM);
-            text_fit(F.bold, values[i], cx, bar.y + 38, 17, cw - 12, i == 0 ? (Color){255, 190, 120, 255} : C_TEXT);
+            text_fit(F.bold, values[i], cx, bar.y + 38, 17, cw - 12, i == 0 ? mix(C_ACCENT_HI, WHITE, 0.35f) : C_TEXT);
         }
     }
 
@@ -1878,7 +1878,7 @@ static void draw_mods(float oy) {
 
     if (U.nmods == 0) {
         Vector2 c = {list.x + list.width / 2, list.y + list.height / 2 - 40};
-        icon_cube((Vector2){c.x, c.y + sinf(ui_time * 2) * 4}, 64, (Color){255, 170, 60, 255}, C_ACCENT, C_ACCENT2);
+        icon_cube((Vector2){c.x, c.y + sinf(ui_time * 2) * 4}, 64, C_ACCENT_HI, C_ACCENT, C_ACCENT2);
         text_center(F.bold, "Aucun mod dans ce pack", (Rectangle){list.x, c.y + 50, list.width, 30}, 20, C_TEXT);
         text_center(F.regular, "Ajoute les tiens avec « Mes mods », ou glisse des fichiers .jar sur la fenêtre.",
                     (Rectangle){list.x, c.y + 82, list.width, 24}, 14, C_MUTED);
@@ -1996,7 +1996,7 @@ static void draw_mods(float oy) {
             rrect_lines((Rectangle){ic.x - 4, ic.y - 4, ic.width + 8, ic.height + 8}, 18, 5, mix(C_PANEL, C_PANEL_HI, h));
         } else {
             rrect(ic, 16, with_alpha(C_ACCENT, 0.12f));
-            icon_cube((Vector2){ic.x + 36, ic.y + 37}, 40, (Color){255, 170, 60, 255}, C_ACCENT, C_ACCENT2);
+            icon_cube((Vector2){ic.x + 36, ic.y + 37}, 40, C_ACCENT_HI, C_ACCENT, C_ACCENT2);
         }
 
         /* nom : titre lisible, sinon nom du fichier sans « .jar » ; 2 lignes centrées au plus */
@@ -2161,7 +2161,7 @@ static void draw_mod_icon(const Texture2D *t, Rectangle r) {
         draw_cover(*t, r, WHITE);
     } else {
         rrect(r, r.width * 0.22f, with_alpha(C_ACCENT, 0.12f));
-        icon_cube((Vector2){r.x + r.width / 2, r.y + r.height * 0.52f}, r.width * 0.56f, (Color){255, 170, 60, 255}, C_ACCENT, C_ACCENT2);
+        icon_cube((Vector2){r.x + r.width / 2, r.y + r.height * 0.52f}, r.width * 0.56f, C_ACCENT_HI, C_ACCENT, C_ACCENT2);
     }
 }
 
@@ -3392,17 +3392,31 @@ static void *music_thread(void *arg) {
     return NULL;
 }
 
-/* Musique des menus fournie par le pack : fichier .ogg du dossier de musique de FancyMenu, sinon le premier .ogg */
+/* Musique du pack : le fichier audio (OGG, MP3 ou WAV) du dossier de musique de son menu, choisi dans l'admin ;
+ * NULL si le pack n'en a pas (packs solo, packs sans musique) */
 static const pack_file *pack_music(const pack *p) {
-    const pack_file *any = NULL;
     for (int i = 0; p && i < p->nfiles; i++) {
         const char *path = p->files[i].path;
         size_t n = strlen(path);
-        if (n < 4 || strcasecmp(path + n - 4, ".ogg") != 0 || !p->files[i].url[0]) continue;
-        if (strstr(path, "music")) return &p->files[i];
-        if (!any) any = &p->files[i];
+        if (!strstr(path, "fancymenu/assets/music/") || !p->files[i].url[0] || n < 4) continue;
+        const char *ext = path + n - 4;
+        if (strcasecmp(ext, ".ogg") == 0 || strcasecmp(ext, ".mp3") == 0 || strcasecmp(ext, ".wav") == 0) return &p->files[i];
     }
-    return any;
+    return NULL;
+}
+
+/* Couleur d'accent de l'interface selon le pack affiché : orange -> rouge en ligne, bleu -> bleu nuit en solo
+ * (fondu entre les deux au changement de pack) */
+static void update_accent(void) {
+    static float k = -1;
+    const pack *p = current_pack();
+    if (U.page == PAGE_SOLO) p = NULL; /* page du pack solo : toujours bleue */
+    float target = U.page == PAGE_SOLO || (p && p->local) ? 1.0f : 0.0f;
+    if (k < 0) k = target;
+    k += (target - k) * fminf(1.0f, GetFrameTime() * 6);
+    const Color on[4] = {{255, 138, 0, 255}, {255, 61, 110, 255}, {255, 170, 60, 255}, {255, 100, 140, 255}};
+    const Color solo[4] = {{58, 146, 255, 255}, {16, 26, 70, 255}, {110, 182, 255, 255}, {34, 54, 128, 255}};
+    accent_set(mix(on[0], solo[0], k), mix(on[1], solo[1], k), mix(on[2], solo[2], k), mix(on[3], solo[3], k));
 }
 
 static void update_music(const snapshot *s) {
@@ -3418,7 +3432,8 @@ static void update_music(const snapshot *s) {
         snprintf(j->sha1, sizeof j->sha1, "%s", f->sha1);
         char h[41];
         sha1_buffer(url, strlen(url), h);
-        char *path = xasprintf("%s/cache/music/%s.ogg", data_dir(), h);
+        size_t pl = strlen(f->path);
+        char *path = xasprintf("%s/cache/music/%s%s", data_dir(), h, f->path + (pl >= 4 ? pl - 4 : pl)); /* extension d'origine */
         snprintf(j->path, sizeof j->path, "%s", path);
         free(path);
         LOCK();
@@ -3928,6 +3943,7 @@ int main(void) {
 
         um_take_search();
         update_music(&s);
+        update_accent();
         update_key_refresh();
         ui_begin_frame(U.login_open || U.um_open || U.mig_open || U.sp_open || U.key_open || U.players_open);
         BeginDrawing();

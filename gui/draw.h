@@ -11,8 +11,16 @@
 #define C_TEXT      (Color){244, 244, 250, 255}
 #define C_MUTED     (Color){160, 162, 185, 255}
 #define C_DIM       (Color){105, 108, 130, 255}
-#define C_ACCENT    (Color){255, 138, 0, 255}
-#define C_ACCENT2   (Color){255, 61, 110, 255}
+/* Couleur d'accent : variable (le launcher passe au bleu pour les packs solo, l'admin garde l'orange) */
+extern Color g_accent, g_accent2, g_accent_hi, g_accent2_hi;
+#define C_ACCENT     g_accent     /* début des dégradés, sélection */
+#define C_ACCENT2    g_accent2    /* fin des dégradés */
+#define C_ACCENT_HI  g_accent_hi  /* survol, face claire des cubes */
+#define C_ACCENT2_HI g_accent2_hi
+/* Palette de la marque (orange -> rouge) */
+#define C_BRAND      (Color){255, 138, 0, 255}
+#define C_BRAND2     (Color){255, 61, 110, 255}
+void accent_set(Color a, Color b, Color a_hi, Color b_hi);
 #define C_OK        (Color){70, 214, 140, 255}
 #define C_ERR       (Color){255, 84, 94, 255}
 

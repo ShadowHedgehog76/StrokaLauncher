@@ -312,7 +312,9 @@ char *sys_pick(int kind, const char *prompt) {
         ofn.lpstrFile = path;
         ofn.nMaxFile = sizeof path;
         ofn.lpstrTitle = prompt;
-        ofn.lpstrFilter = kind == PICK_JAR ? "Mods (*.jar)\0*.jar\0" : "Images (*.png;*.jpg;*.jpeg)\0*.png;*.jpg;*.jpeg\0";
+        ofn.lpstrFilter = kind == PICK_JAR     ? "Mods (*.jar)\0*.jar\0"
+                          : kind == PICK_AUDIO ? "Musique (*.ogg;*.mp3;*.wav)\0*.ogg;*.mp3;*.wav\0"
+                                               : "Images (*.png;*.jpg;*.jpeg)\0*.png;*.jpg;*.jpeg\0";
         ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
         if (!GetOpenFileNameA(&ofn)) return NULL;
     }
@@ -327,6 +329,10 @@ char *sys_pick(int kind, const char *prompt) {
     if (kind == PICK_FOLDER) cmd = xasprintf("osascript -e 'POSIX path of (choose folder with prompt \"%s\")' 2>/dev/null", title);
     else if (kind == PICK_JAR)
         cmd = xasprintf("osascript -e 'POSIX path of (choose file with prompt \"%s\" of type {\"jar\", \"public.data\"})' 2>/dev/null", title);
+    else if (kind == PICK_AUDIO)
+        cmd = xasprintf("osascript -e 'POSIX path of (choose file with prompt \"%s\" of type {\"ogg\", \"mp3\", \"wav\", "
+                        "\"public.audio\"})' 2>/dev/null",
+                        title);
     else
         cmd = xasprintf("osascript -e 'POSIX path of (choose file of type {\"png\", \"jpg\", \"jpeg\", \"public.png\", \"public.jpeg\"} "
                         "with prompt \"%s\")' 2>/dev/null",
@@ -336,14 +342,19 @@ char *sys_pick(int kind, const char *prompt) {
     return r;
 #else
     /* zenity (GNOME, Ubuntu), sinon kdialog (KDE : SteamOS, Kubuntu…) s'il n'est pas installé */
-    const char *zf = kind == PICK_FOLDER ? "--directory" : kind == PICK_JAR ? "--file-filter='*.jar'" : "--file-filter='*.png *.jpg *.jpeg'";
+    const char *zf = kind == PICK_FOLDER  ? "--directory"
+                     : kind == PICK_JAR   ? "--file-filter='*.jar'"
+                     : kind == PICK_AUDIO ? "--file-filter='*.ogg *.mp3 *.wav'"
+                                          : "--file-filter='*.png *.jpg *.jpeg'";
     int missing;
     cmd = xasprintf("zenity --file-selection --title=\"%s\" %s 2>/dev/null", title, zf);
     r = read_command(cmd, &missing);
     free(cmd);
     if (r || !missing) return r; /* choisi, ou annulé par le joueur */
     if (kind == PICK_FOLDER) cmd = xasprintf("kdialog --title \"%s\" --getexistingdirectory . 2>/dev/null", title);
-    else cmd = xasprintf("kdialog --title \"%s\" --getopenfilename . '%s' 2>/dev/null", title, kind == PICK_JAR ? "*.jar" : "*.png *.jpg *.jpeg");
+    else
+        cmd = xasprintf("kdialog --title \"%s\" --getopenfilename . '%s' 2>/dev/null", title,
+                        kind == PICK_JAR ? "*.jar" : kind == PICK_AUDIO ? "*.ogg *.mp3 *.wav" : "*.png *.jpg *.jpeg");
     r = read_command(cmd, NULL);
     free(cmd);
     return r;

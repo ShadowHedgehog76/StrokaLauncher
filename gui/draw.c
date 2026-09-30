@@ -8,6 +8,16 @@
 
 fonts_t F;
 
+Color g_accent = {255, 138, 0, 255}, g_accent2 = {255, 61, 110, 255};
+Color g_accent_hi = {255, 170, 60, 255}, g_accent2_hi = {255, 100, 140, 255};
+
+void accent_set(Color a, Color b, Color a_hi, Color b_hi) {
+    g_accent = a;
+    g_accent2 = b;
+    g_accent_hi = a_hi;
+    g_accent2_hi = b_hi;
+}
+
 /* Latin-1 + quelques signes typographiques */
 static int *codepoints(int *count) {
     static int cps[256];
