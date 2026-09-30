@@ -65,6 +65,8 @@ const char *platform_data_root(void);            /* dossier de données par déf
 void sleep_ms(int ms);
 long long mono_ms(void);                          /* horloge monotone, en millisecondes */
 void sys_open(const char *path_or_url);           /* ouvre un dossier / fichier / lien avec le système */
+char *self_exe_path(void);                        /* exécutable en cours, à libérer (NULL si inconnu) */
+int spawn_detached(char *const argv[]);           /* lance sans attendre (redémarrage) */
 
 enum { PICK_FOLDER, PICK_IMAGE, PICK_JAR };
 char *sys_pick(int kind, const char *prompt);     /* fenêtre de choix du système ; chemin à libérer, NULL si annulé */

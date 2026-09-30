@@ -22,7 +22,11 @@
 #include <unistd.h>
 #endif
 #ifdef __APPLE__
+#include <mach-o/dyld.h>
 #include <sys/sysctl.h>
+#endif
+#ifdef __linux__
+#include <limits.h>
 #endif
 
 /* ---------- dossiers et fichiers ---------- */
@@ -171,6 +175,61 @@ int run_process(char *const argv[], const char *cwd) {
         if (errno != EINTR) return -1;
     }
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+#endif
+}
+
+/* Chemin de l'exécutable en cours (séparateurs « / »), à libérer ; NULL si inconnu */
+char *self_exe_path(void) {
+#ifdef _WIN32
+    char buf[MAX_PATH * 4];
+    DWORD n = GetModuleFileNameA(NULL, buf, sizeof buf);
+    if (n == 0 || n >= sizeof buf) return NULL;
+    for (char *p = buf; *p; p++)
+        if (*p == '\\') *p = '/';
+    return xstrdup(buf);
+#elif defined(__APPLE__)
+    char buf[4096];
+    uint32_t n = sizeof buf;
+    if (_NSGetExecutablePath(buf, &n) != 0) return NULL;
+    char real[4096];
+    return xstrdup(realpath(buf, real) ? real : buf);
+#else
+    char buf[4096];
+    ssize_t n = readlink("/proc/self/exe", buf, sizeof buf - 1);
+    if (n <= 0) return NULL;
+    buf[n] = '\0';
+    return xstrdup(buf);
+#endif
+}
+
+/* Lance un programme sans attendre sa fin (redémarrage après une mise à jour) */
+int spawn_detached(char *const argv[]) {
+#ifdef _WIN32
+    sbuf cmd;
+    sb_init(&cmd);
+    for (int i = 0; argv[i]; i++) {
+        if (i) sb_add(&cmd, " ");
+        append_quoted(&cmd, argv[i]);
+    }
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    memset(&si, 0, sizeof si);
+    si.cb = sizeof si;
+    BOOL ok = CreateProcessA(NULL, cmd.s, NULL, NULL, FALSE, DETACHED_PROCESS, NULL, NULL, &si, &pi);
+    sb_free(&cmd);
+    if (!ok) return -1;
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return 0;
+#else
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        setsid();
+        execvp(argv[0], argv);
+        _exit(127);
+    }
+    return 0;
 #endif
 }
 

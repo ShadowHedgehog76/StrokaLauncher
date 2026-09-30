@@ -40,6 +40,14 @@ Avant le premier build, ajoute dans **Settings → Secrets and variables → Act
 `SUPABASE_KEY` (clé publishable). Pour publier une version : `git tag v1.0.0 && git push origin v1.0.0` — une
 release GitHub est créée avec tous les paquets.
 
+### Mises à jour automatiques du launcher
+
+Le launcher vérifie la dernière release GitHub au démarrage puis toutes les 6 heures. Si une version plus
+récente existe, un bouton **Mise à jour x.y.z** apparaît en haut à droite : il télécharge le paquet du système,
+remplace l'application et redémarre (macOS : le `.app` ; Windows : l'exécutable et ses DLL ; Linux :
+l'AppImage — l'archive `.tar.gz` ouvre simplement la page de téléchargement). La version vient du tag
+(`v1.2.3`) ; une compilation locale est en version `dev` et ne se met pas à jour.
+
 
 Configuration : copie `supabase.env.example` en `supabase.env` (URL du projet et clé **publishable**,
 jamais la clé `service_role` / `sb_secret_…`). Le schéma de la base est dans `supabase/schema.sql`.
@@ -88,7 +96,8 @@ jamais la clé `service_role` / `sb_secret_…`). Le schéma de la base est dans
 `STROKA_HOME` change le dossier de données. Pour le développement : `STROKA_PACKS_FILE=packs.json`
 (packs lus depuis un fichier au format Supabase), `STROKA_PAGE=…`, `STROKA_SCREENSHOT=capture.png`
 (+ `STROKA_SHOT_FRAME`), `STROKA_SCRIPT="60:x,y;90:x,y"` (clics simulés pour les tests d'interface) et
-`STROKA_JVM_ARGS` (arguments Java supplémentaires au lancement du jeu), `STROKA_UM_SEARCH=…` (recherche
+`STROKA_JVM_ARGS` (arguments Java supplémentaires au lancement du jeu), `STROKA_UPDATE_API` (autre source
+pour la vérification des mises à jour, ex : `file:///…/latest.json`), `STROKA_UM_SEARCH=…` (recherche
 pré-remplie dans « Mes mods », pour les captures).
 
 
@@ -101,6 +110,8 @@ pré-remplie dans « Mes mods », pour les captures).
 | `gui/ui.c`, `gui/draw.c`, `gui/scene.c` | boîte à outils d'interface partagée, dessin, fond animé |
 | `src/game.c` | installation vanilla + loaders, arguments, lancement |
 | `src/pack.c`, `src/sync.c` | modèle de pack, synchronisation des fichiers, `servers.dat` |
+| `src/updater.c` | mise à jour automatique du launcher (releases GitHub) |
+| `src/platform.c`, `src/zip.c` | code propre à chaque système (processus, fenêtres de choix, dossiers), lecture des .jar |
 | `src/usermods.c` | mods ajoutés par le joueur : liste, recherche Modrinth, installation au lancement |
 | `src/supabase.c` | API REST / Auth / Storage |
 | `src/auth.c` | Microsoft (code appareil) → Xbox Live → XSTS → Minecraft |

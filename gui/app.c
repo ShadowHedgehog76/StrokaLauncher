@@ -28,6 +28,7 @@
 #include "supabase.h"
 #include "sync.h"
 #include "usermods.h"
+#include "updater.h"
 #include "ui.h"
 #include "util.h"
 #include "webp/decode.h"
@@ -71,6 +72,11 @@ static struct {
     int packs_ready, packs_result;
     int packs_silent; /* actualisation automatique en arrière-plan */
     char notice[512];  /* message du moteur à afficher en notification (vide : aucun) */
+    /* mise à jour du launcher (releases GitHub) */
+    int upd_state;     /* 0 inconnu, 1 à jour, 2 disponible */
+    update_info upd;
+    int upd_busy, upd_done, upd_rc;
+    char upd_err[256];
     /* recherche de mods perso (Modrinth) */
     int um_busy, um_done, um_rc, um_n_new;
     um_hit *um_new;
@@ -822,6 +828,41 @@ static int has_update(int i) {
 static void open_path(const char *path) {
     mkdirs(path);
     sys_open(path);
+}
+
+/* ---------- mise à jour du launcher ---------- */
+
+/* Vérifie les releases GitHub au démarrage puis toutes les 6 heures */
+static void *update_check_thread(void *arg) {
+    (void)arg;
+    sleep_ms(3000);
+    for (;;) {
+        update_info u;
+        int rc = updater_check(&u);
+        LOCK();
+        if (rc >= 0 && !S.upd_busy) {
+            S.upd_state = rc == 1 ? 2 : 1;
+            if (rc == 1) S.upd = u;
+        }
+        UNLOCK();
+        sleep_ms(6 * 3600 * 1000);
+    }
+    return NULL;
+}
+
+static void *update_install_thread(void *arg) {
+    (void)arg;
+    LOCK();
+    update_info u = S.upd;
+    UNLOCK();
+    int rc = updater_install(&u);
+    LOCK();
+    S.upd_rc = rc;
+    snprintf(S.upd_err, sizeof S.upd_err, "%s", rc ? last_error() : "");
+    S.upd_done = 1;
+    S.upd_busy = 0;
+    UNLOCK();
+    return NULL;
 }
 
 /* ---------- mods perso ---------- */
@@ -2113,7 +2154,18 @@ static void draw_settings(const snapshot *s, float oy) {
         begin_login();
     }
 
-    text(F.medium, "Stroka Launcher " LAUNCHER_VERSION, SIDEBAR_W + 58, 638 + 110 + 22 + oy, 12, C_DIM);
+    {
+        LOCK();
+        int st = S.upd_state;
+        char v[32];
+        snprintf(v, sizeof v, "%s", S.upd.version);
+        UNLOCK();
+        char line[128];
+        if (st == 2) snprintf(line, sizeof line, "Stroka Launcher %s  ·  version %s disponible (bouton en haut à droite)", LAUNCHER_VERSION, v);
+        else if (st == 1) snprintf(line, sizeof line, "Stroka Launcher %s  ·  à jour", LAUNCHER_VERSION);
+        else snprintf(line, sizeof line, "Stroka Launcher %s", LAUNCHER_VERSION);
+        text(F.medium, line, SIDEBAR_W + 58, 638 + 110 + 22 + oy, 12, st == 2 ? C_ACCENT : C_DIM);
+    }
     ui_layer = saved_layer;
     EndScissorMode();
     if (max_scroll > 0) {
@@ -2219,6 +2271,59 @@ static void handle_task_results(void) {
     if (task == TASK_PLAY) scan_mods();
 }
 
+/* Bouton « Mise à jour » dans la barre de titre ; renvoie 1 s'il faut quitter (nouvelle version lancée) */
+static int draw_update_button(const snapshot *s) {
+    LOCK();
+    int state = S.upd_state, busy = S.upd_busy, done = S.upd_done, rc = S.upd_rc, installable = S.upd.installable;
+    char version[32], err[256];
+    snprintf(version, sizeof version, "%s", S.upd.version);
+    snprintf(err, sizeof err, "%s", S.upd_err);
+    S.upd_done = 0;
+    UNLOCK();
+    if (done) {
+        if (rc == 0 && updater_restart() == 0) return 1;
+        ui_toast(2, "Mise à jour impossible : %s", rc ? err : "redémarrage impossible");
+    }
+    if (state != 2 && !busy) return 0;
+
+    char label[64];
+    if (busy) snprintf(label, sizeof label, "Mise à jour…");
+    else snprintf(label, sizeof label, "Mise à jour %s", version);
+    Vector2 m = measure(F.semibold, label, 13);
+    Rectangle r = {WIN_W - 100 - 14 - (m.x + 44), 8, m.x + 44, TITLE_H - 16};
+    int hot = !busy && ui_mouse_in(r);
+    float h = ui_anim("upd-btn", hot ? 1.0f : 0.0f, 14);
+    float pulse = 0.5f + 0.5f * sinf(ui_time * 2.4f);
+    if (!busy) glow(r, r.height / 2, with_alpha(C_ACCENT2, 0.25f + 0.2f * pulse), 0, 10);
+    pill_gradient(r, mix(C_ACCENT, WHITE, 0.12f * h), mix(C_ACCENT2, WHITE, 0.12f * h));
+    if (busy) spinner((Vector2){r.x + 18, r.y + r.height / 2}, 7, ui_time, WHITE);
+    else icon_download((Vector2){r.x + 18, r.y + r.height / 2}, 13, WHITE);
+    text(F.semibold, label, r.x + 32, r.y + (r.height - 16) / 2, 13, WHITE);
+    if (hot) {
+        ui_hand();
+        const char *tip = s->game_running ? "Ferme Minecraft pour mettre à jour le launcher"
+                          : installable   ? "Installer la nouvelle version et redémarrer"
+                                          : "Ouvrir la page de téléchargement";
+        Vector2 tm = measure(F.medium, tip, 12);
+        Rectangle t = {fminf(r.x, WIN_W - tm.x - 30), r.y + r.height + 8, tm.x + 20, 26};
+        rrect(t, 8, (Color){26, 24, 38, 245});
+        rrect_lines(t, 8, 1, C_BORDER);
+        text(F.medium, tip, t.x + 10, t.y + 6, 12, C_MUTED);
+    }
+    if (hot && ui_btn_released() && !s->game_running && s->task == TASK_IDLE) {
+        if (!installable) {
+            OpenURL("https://github.com/" UPDATE_REPO "/releases/latest");
+        } else {
+            LOCK();
+            S.upd_busy = 1;
+            UNLOCK();
+            ui_toast(0, "Téléchargement de la version %s…", version);
+            spawn(update_install_thread, NULL);
+        }
+    }
+    return 0;
+}
+
 /* ---------- icône de l'application (make app) ---------- */
 
 static int export_icon(const char *path) {
@@ -2258,6 +2363,8 @@ int main(void) {
     scene_init((unsigned)time(NULL));
     refresh_packs();
     spawn(ping_thread, NULL);
+    updater_cleanup();                 /* restes de la mise à jour précédente */
+    spawn(update_check_thread, NULL);  /* nouvelles versions du launcher (releases GitHub) */
 
     /* Outils de développement : STROKA_PAGE=home|mods|settings|login|play, STROKA_SCREENSHOT=fichier.png */
     const char *dev_page = getenv("STROKA_PAGE");
@@ -2328,6 +2435,7 @@ int main(void) {
         else draw_settings(&s, oy);
         draw_sidebar();
         quit = ui_titlebar(WIN_W, TITLE_H, SIDEBAR_W, "STROKA", "LAUNCHER");
+        if (draw_update_button(&s)) quit = 1; /* nouvelle version lancée : on laisse la place */
 
         ui_layer = 1;
         float appear = ui_anim("modal", U.login_open ? 1.0f : 0.0f, 12);

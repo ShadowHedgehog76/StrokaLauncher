@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "config.h"
 #include "http.h"
@@ -276,6 +277,37 @@ static char *installer_version_id(const char *installer) {
     return out;
 }
 
+/* Essential : son chargeur (le .jar de mods/) télécharge le vrai mod dans essential/. Réglé sur « with-prompt »,
+ * il demande l'accord du joueur pour chaque mise à jour, et un refus bloque ensuite toute mise à jour : le jeu reste
+ * sur une vieille version (garde-robe vide : « Error loading featured page! »). On le remet en mise à jour
+ * automatique avant chaque lancement. */
+static void essential_auto_update(const pack *p, const char *inst) {
+    int has = 0;
+    for (int i = 0; i < p->nfiles && !has; i++) {
+        const char *f = p->files[i].path;
+        if (strncmp(f, "mods/", 5) == 0 && strncasecmp(f + 5, "essential", 9) == 0 && (f[14] == '-' || f[14] == '_')) has = 1;
+    }
+    if (!has) return;
+    char *path = xasprintf("%s/essential/essential-loader.properties", inst);
+    char *old = read_file(path, NULL);
+    sbuf b;
+    sb_init(&b);
+    /* garde les autres réglages du chargeur, remplace autoUpdate et oublie la réponse « non » */
+    for (char *line = old ? strtok(old, "\n") : NULL; line; line = strtok(NULL, "\n")) {
+        if (strncmp(line, "autoUpdate=", 11) == 0 || strncmp(line, "pendingUpdateResolution=", 24) == 0 ||
+            strncmp(line, "pendingUpdateVersion=", 21) == 0)
+            continue;
+        sb_add(&b, line);
+        sb_add(&b, "\n");
+    }
+    sb_add(&b, "autoUpdate=true\n");
+    mkdirs_parent(path);
+    write_file(path, b.s, b.len);
+    sb_free(&b);
+    free(old);
+    free(path);
+}
+
 /* Forge / NeoForge : installeur officiel en mode client sans interface */
 static cJSON *ensure_installer_loader(const char *root, const pack *p, const char *java, char **id_out) {
     int neo = strcmp(p->loader, "neoforge") == 0;
@@ -498,6 +530,7 @@ int game_launch(const account *acc, const pack *p, const launch_opts *opts) {
     if (pack_sync(p, inst) != 0) goto out;
     char um_report[512];
     usermods_apply(p, inst, um_report, sizeof um_report); /* mods ajoutés par le joueur : jamais bloquant */
+    essential_auto_update(p, inst);
     if (um_report[0]) report_notice("%s", um_report);
     int join = opts->join_server && p->server_address[0];
     if (p->server_address[0]) servers_dat_ensure(inst, p->name, p->server_address);

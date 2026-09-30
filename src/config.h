@@ -2,7 +2,14 @@
 #define STROKA_CONFIG_H
 
 #define LAUNCHER_NAME "StrokaLauncher"
-#define LAUNCHER_VERSION "1.0.0"
+/* Version : injectée par la compilation (make LAUNCHER_VERSION=1.0.1, GitHub Actions depuis le tag) ;
+ * « dev » pour une compilation locale (pas de mise à jour automatique) */
+#ifndef LAUNCHER_VERSION
+#define LAUNCHER_VERSION "dev"
+#endif
+
+/* Dépôt GitHub dont les releases servent aux mises à jour automatiques */
+#define UPDATE_REPO "ShadowHedgehog76/StrokaLauncher"
 
 #define DEFAULT_RAM_MB 4096
 

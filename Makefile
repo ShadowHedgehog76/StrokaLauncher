@@ -9,6 +9,11 @@ BUILD   ?= build
 -include supabase.env
 SB_DEFS := -DSUPABASE_URL='"$(SUPABASE_URL)"' -DSUPABASE_KEY='"$(SUPABASE_KEY)"'
 
+# Version du launcher (ex : make LAUNCHER_VERSION=1.0.1) ; sans elle : « dev », sans mise à jour automatique
+ifneq ($(LAUNCHER_VERSION),)
+  CFLAGS += -DLAUNCHER_VERSION='"$(LAUNCHER_VERSION)"'
+endif
+
 # ---------- plateforme ----------
 ifeq ($(OS),Windows_NT)
   PLATFORM  := windows
@@ -40,7 +45,7 @@ LAUNCHER := StrokaLauncher$(EXE)
 CLI      := stroka-cli$(EXE)
 
 CORE_SRC := src/auth.c src/game.c src/http.c src/java.c src/modmeta.c src/pack.c src/ping.c src/platform.c src/report.c \
-            src/settings.c src/skin.c src/supabase.c src/sync.c src/usermods.c src/util.c src/zip.c
+            src/settings.c src/skin.c src/supabase.c src/sync.c src/updater.c src/usermods.c src/util.c src/zip.c
 CJSON    := third_party/cjson/cJSON.c
 GUI_SRC  := gui/app.c gui/brand.c gui/draw.c gui/scene.c gui/ui.c
 
