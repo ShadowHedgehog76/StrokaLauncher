@@ -187,6 +187,7 @@ int ui_toggle(const char *id, Rectangle r, int on) {
 void ui_focus(const char *id) { focus_id = hash_id(id); }
 void ui_unfocus(void) { focus_id = 0; }
 int ui_has_focus(const char *id) { return focus_id == hash_id(id); }
+int ui_any_focus(void) { return focus_id != 0; }
 
 static void utf8_pop(char *buf) {
     size_t n = strlen(buf);

@@ -19,6 +19,7 @@ void pack_init(pack *p) {
     p->logo_url = xstrdup("");
     p->banner_url = xstrdup("");
     p->theme = xstrdup("");
+    p->access_key = xstrdup("");
     p->allow_user_mods = 1;
     p->revision = 1;
 }
@@ -41,6 +42,7 @@ void pack_free(pack *p) {
     free(p->logo_url);
     free(p->banner_url);
     free(p->theme);
+    free(p->access_key);
     for (int i = 0; i < p->nfiles; i++) {
         free(p->files[i].path);
         free(p->files[i].url);
@@ -111,6 +113,8 @@ void pack_copy(pack *dst, const pack *src) {
     pack_set(&dst->logo_url, src->logo_url);
     pack_set(&dst->banner_url, src->banner_url);
     pack_set(&dst->theme, src->theme);
+    pack_set(&dst->access_key, src->access_key);
+    dst->local = src->local;
     dst->published = src->published;
     dst->allow_user_mods = src->allow_user_mods;
     dst->revision = src->revision;
@@ -141,6 +145,8 @@ int pack_from_json(const cJSON *j, pack *p) {
     pack_set(&p->logo_url, js(j, "logo_url"));
     pack_set(&p->banner_url, js(j, "banner_url"));
     pack_set(&p->theme, js(j, "theme"));
+    pack_set(&p->access_key, js(j, "access_key"));
+    p->local = cJSON_IsTrue(cJSON_GetObjectItem(j, "local"));
     p->published = cJSON_IsTrue(cJSON_GetObjectItem(j, "published"));
     const cJSON *um = cJSON_GetObjectItem(j, "allow_user_mods");
     p->allow_user_mods = cJSON_IsBool(um) ? cJSON_IsTrue(um) : 1; /* absent (ancienne base) : autorisé */
@@ -210,6 +216,17 @@ static int parse_list(const char *json, pack_list *out) {
     return 0;
 }
 
+static char g_keys[512];
+
+void packs_set_access_keys(const char *csv) {
+    /* seulement lettres, chiffres, tirets et virgules : la valeur part dans un en-tête HTTP */
+    size_t n = 0;
+    for (const char *c = csv ? csv : ""; *c && n + 1 < sizeof g_keys; c++)
+        if ((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || *c == '-' || *c == ',')
+            g_keys[n++] = *c;
+    g_keys[n] = '\0';
+}
+
 int packs_fetch(pack_list *out, const char *token) {
     memset(out, 0, sizeof *out);
     /* Développement : packs lus depuis un fichier JSON local (même format que Supabase) */
@@ -224,7 +241,10 @@ int packs_fetch(pack_list *out, const char *token) {
     char *cache = path_join(data_dir(), "packs_cache.json");
     const char *path = "/rest/v1/packs?select=*,pack_files(path,url,sha1,size,kind)&order=sort_order.asc,name.asc";
     http_resp r;
-    int rc = sb_request("GET", path, token, NULL, NULL, 0, &r);
+    char *keys = g_keys[0] ? xasprintf("x-stroka-keys: %s", g_keys) : NULL;
+    const char *extra[] = {keys, NULL};
+    int rc = sb_request("GET", path, token, keys ? extra : NULL, NULL, 0, &r);
+    free(keys);
     if (rc == 0 && r.status == 200 && parse_list(r.body, out) == 0) {
         if (!token) write_file(cache, r.body, r.len);
         http_resp_free(&r);

@@ -24,6 +24,8 @@ typedef struct pack {
     char *logo_url;
     char *banner_url;
     char *theme;         /* fond animé (launcher et menus du jeu) : "night", "snow"… ; vide = thème par défaut */
+    char *access_key;    /* pack privé : visible seulement avec cette clé (vide = public) */
+    int local;           /* pack solo créé par le joueur (enregistré sur cet ordinateur) */
     int published;
     int allow_user_mods; /* le joueur peut ajouter ses propres mods (launcher) */
     int revision;
@@ -56,6 +58,9 @@ void pack_loader_label(const pack *p, char *out, size_t n);
  * token : JWT admin pour voir aussi les brouillons, ou NULL. */
 int packs_fetch(pack_list *out, const char *token);
 void packs_free(pack_list *l);
+
+/* Clés d'accès des packs privés, séparées par des virgules (envoyées avec chaque récupération des packs) */
+void packs_set_access_keys(const char *csv);
 
 /* Dossier de jeu d'un pack (à libérer) */
 char *pack_instance_dir(const pack *p);

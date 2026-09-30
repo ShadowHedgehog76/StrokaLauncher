@@ -19,6 +19,7 @@ typedef struct {
     char file[256];     /* nom du .jar (fichier local) */
     char sha1[41];
     char loader[16];    /* loader du .jar (fichier local), "" si inconnu */
+    char icon[256];     /* icône Modrinth (URL), "" si inconnue */
 } user_mod;
 
 typedef struct {
@@ -32,6 +33,7 @@ void usermods_free(user_mod_list *l);
 
 /* 0 si ajouté, 1 si déjà présent, -1 si erreur */
 int usermods_add_modrinth(const char *slug, const char *project, const char *title);
+int usermods_add_modrinth_icon(const char *slug, const char *project, const char *title, const char *icon_url);
 int usermods_add_file(const char *slug, const char *jar_path);
 int usermods_remove(const char *slug, const char *id);
 int usermods_contains(const char *slug, const char *id);
@@ -43,6 +45,7 @@ typedef struct {
     char description[200];
     char author[64];
     long long downloads;
+    char icon_url[256];
 } um_hit;
 int usermods_search(const char *query, const char *loader, const char *mc, um_hit **out, int *count);
 

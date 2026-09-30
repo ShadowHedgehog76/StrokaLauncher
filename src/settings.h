@@ -5,7 +5,9 @@ typedef struct {
     int ram_mb;
     int minimize_on_launch; /* réduire le launcher pendant que le jeu tourne */
     int join_server;        /* rejoindre directement le serveur du pack */
+    int install_music;      /* musique du launcher (celle des menus du pack) */
     char selected_pack[64]; /* slug du dernier pack choisi */
+    char access_keys[512];  /* clés des packs privés, séparées par des virgules */
 } settings;
 
 void settings_load(settings *s);

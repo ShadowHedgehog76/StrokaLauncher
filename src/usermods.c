@@ -74,6 +74,7 @@ static void entry_from_json(const cJSON *e, user_mod *m) {
     m->source = strcmp(js(e, "source"), "file") == 0 ? UM_FILE : UM_MODRINTH;
     snprintf(m->project, sizeof m->project, "%s", js(e, "project"));
     snprintf(m->title, sizeof m->title, "%s", js(e, "title"));
+    snprintf(m->icon, sizeof m->icon, "%s", js(e, "icon"));
     snprintf(m->file, sizeof m->file, "%s", js(e, "file"));
     snprintf(m->sha1, sizeof m->sha1, "%s", js(e, "sha1"));
     snprintf(m->loader, sizeof m->loader, "%s", js(e, "loader"));
@@ -144,6 +145,10 @@ static int add_entry(const char *slug, cJSON *entry) {
 }
 
 int usermods_add_modrinth(const char *slug, const char *project, const char *title) {
+    return usermods_add_modrinth_icon(slug, project, title, "");
+}
+
+int usermods_add_modrinth_icon(const char *slug, const char *project, const char *title, const char *icon_url) {
     cJSON *e = cJSON_CreateObject();
     char id[64];
     snprintf(id, sizeof id, "mr:%s", project);
@@ -151,6 +156,7 @@ int usermods_add_modrinth(const char *slug, const char *project, const char *tit
     cJSON_AddStringToObject(e, "source", "modrinth");
     cJSON_AddStringToObject(e, "project", project);
     cJSON_AddStringToObject(e, "title", title);
+    if (icon_url && *icon_url) cJSON_AddStringToObject(e, "icon", icon_url);
     return add_entry(slug, e);
 }
 
@@ -261,6 +267,7 @@ int usermods_search(const char *query, const char *loader, const char *mc, um_hi
         snprintf(m->author, sizeof m->author, "%s", js(h, "author"));
         const cJSON *d = cJSON_GetObjectItem(h, "downloads");
         m->downloads = cJSON_IsNumber(d) ? (long long)d->valuedouble : 0;
+        snprintf(m->icon_url, sizeof m->icon_url, "%s", js(h, "icon_url"));
     }
     cJSON_Delete(j);
     return 0;

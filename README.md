@@ -72,6 +72,19 @@ jamais la clé `service_role` / `sb_secret_…`). Le schéma de la base est dans
   - un pack peut les **bloquer** :
     le dossier `mods` reste alors identique au pack (mods perso retirés, `.jar` déposés à la main mis de
     côté dans `.stroka/mods-desactives` et remis en place si l'option est réactivée).
+- **Une bulle de packs** à gauche, avec en haut une bascule **En ligne / Solo** ; en bas, le bouton clé
+  (packs en ligne) ou **+** (packs solo).
+- **Packs solo** : page d'édition façon admin (bouton **+**, ou crayon de la barre du bas) — onglet
+  *Général* (nom, description, icône, loader et versions, fond animé avec aperçus) et onglet *Mods*
+  (recherche Modrinth filtrée sur la version du pack, `.jar`, liste filtrable avec icônes). Enregistrés sur
+  l'ordinateur (`local_packs.json`) ; suppression depuis la même page.
+- **Joueurs en ligne** : un clic sur la carte « Joueurs en ligne » ouvre la liste des joueurs connectés au
+  serveur du pack (avec leur tête de skin), d'après l'échantillon renvoyé par le serveur (12 au plus en vanilla).
+- **Recherche dans les mods** : barre de recherche sur la page Mods et dans « Mes mods » ; icônes Modrinth
+  dans les résultats et la liste des mods ajoutés.
+- **Packs privés** : un pack peut avoir une clé d'accès (réglée dans l'admin). Il n'apparaît que dans les
+  launchers où la clé a été saisie (bouton clé en bas de la bulle des packs en ligne) ; la clé est envoyée à
+  Supabase dans l'en-tête `x-stroka-keys` et vérifiée par la politique de sécurité (`supabase/schema.sql`).
 - **Importer une ancienne installation** (Réglages → *Importer depuis un autre launcher*) : les instances
   Prism (y compris Flatpak), Modrinth App, CurseForge, GDLauncher et le launcher officiel sont détectées
   automatiquement ; sinon, on choisit le dossier de l'instance. Le pack est d'abord synchronisé (ses mods
@@ -83,6 +96,10 @@ jamais la clé `service_role` / `sb_secret_…`). Le schéma de la base est dans
   - en option, les mods de l'ancienne instance absents du pack deviennent des mods perso de ce pack.
   Jamais copiés : `mods/`, logs, rapports de plantage, fichiers du launcher d'origine, menus FancyMenu si
   le pack a les siens. L'instance d'origine n'est pas modifiée.
+- **Musique** : la musique des menus du pack affiché (son `.ogg` FancyMenu, téléchargé une fois) joue en
+  boucle dans le launcher, avec un fondu. Elle s'efface quand Minecraft est lancé ou quand la fenêtre est
+  réduite, et reprend au même endroit. Désactivable dans Réglages → *Pendant le jeu*.
+- Réglages → *À propos* : version du launcher, boutons **GitHub** et **Signaler un problème** (nouvelle issue).
 - Configs : installées si absentes, mises à jour seulement quand le pack les modifie (les réglages du
   joueur sont gardés sinon).
 - Mises à jour : quand un pack change, les joueurs voient une pastille de
@@ -103,13 +120,14 @@ jamais la clé `service_role` / `sb_secret_…`). Le schéma de la base est dans
 | `…/account.json` | jetons Microsoft (lisibles par l'utilisateur seul) |
 | `…/config.json`, `…/packs_cache.json` | réglages, liste des packs pour le mode hors ligne |
 | `…/user_mods.json`, `…/user-mods/` | mods ajoutés par le joueur (liste, `.jar` importés) |
+| `…/local_packs.json` | packs solo créés par le joueur |
 
 `STROKA_HOME` change le dossier de données. Pour le développement : `STROKA_PACKS_FILE=packs.json`
 (packs lus depuis un fichier au format Supabase), `STROKA_PAGE=…`, `STROKA_SCREENSHOT=capture.png`
 (+ `STROKA_SHOT_FRAME`), `STROKA_SCRIPT="60:x,y;90:x,y"` (clics simulés pour les tests d'interface) et
 `STROKA_JVM_ARGS` (arguments Java supplémentaires au lancement du jeu), `STROKA_UPDATE_API` (autre source
 pour la vérification des mises à jour, ex : `file:///…/latest.json`), `STROKA_UM_SEARCH=…` (recherche
-pré-remplie dans « Mes mods », pour les captures), `STROKA_PAGE=import` (fenêtre d'import ouverte).
+pré-remplie dans « Mes mods », pour les captures), `STROKA_PAGE=import|solo|soloedit|soloedit-mods|key|players|mymods` (fenêtres et pages ouvertes pour les captures), `STROKA_SCROLL=…` (Réglages défilés).
 
 
 ## Code
@@ -123,6 +141,7 @@ pré-remplie dans « Mes mods », pour les captures), `STROKA_PAGE=import` (fen�
 | `src/pack.c`, `src/sync.c` | modèle de pack, synchronisation des fichiers, `servers.dat` |
 | `src/updater.c` | mise à jour automatique du launcher (releases GitHub) |
 | `src/platform.c`, `src/zip.c` | code propre à chaque système (processus, fenêtres de choix, dossiers), lecture des .jar |
+| `src/localpacks.c`, `src/versions.c` | packs solo ; versions de Minecraft et des loaders |
 | `src/migrate.c` | import d'une instance Prism / Modrinth / CurseForge / GDLauncher / officielle |
 | `src/usermods.c` | mods ajoutés par le joueur : liste, recherche Modrinth, installation au lancement |
 | `src/supabase.c` | API REST / Auth / Storage |

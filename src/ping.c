@@ -191,6 +191,16 @@ int server_ping(const char *address, server_status *out) {
     const cJSON *on = cJSON_GetObjectItem(players, "online"), *max = cJSON_GetObjectItem(players, "max");
     out->players = cJSON_IsNumber(on) ? on->valueint : 0;
     out->max_players = cJSON_IsNumber(max) ? max->valueint : 0;
+    out->nsample = 0;
+    const cJSON *pl;
+    cJSON_ArrayForEach(pl, cJSON_GetObjectItem(players, "sample")) {
+        const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(pl, "name"));
+        const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(pl, "id"));
+        if (!name || !*name || out->nsample >= 16) continue;
+        snprintf(out->sample_name[out->nsample], sizeof out->sample_name[0], "%s", name);
+        snprintf(out->sample_id[out->nsample], sizeof out->sample_id[0], "%s", id ? id : "");
+        out->nsample++;
+    }
     const char *ver = cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetObjectItem(j, "version"), "name"));
     snprintf(out->version, sizeof out->version, "%s", ver ? ver : "");
     out->latency_ms = (int)(mono_ms() - t0);

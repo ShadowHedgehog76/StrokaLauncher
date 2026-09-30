@@ -63,6 +63,8 @@ create table if not exists public.pack_files (
 alter table public.packs add column if not exists allow_user_mods boolean not null default true;
 -- Fond animé du pack (launcher et menus du jeu) : identifiant de thème, null = thème par défaut
 alter table public.packs add column if not exists theme text;
+-- Pack privé : visible seulement par les launchers qui envoient sa clé (en-tête x-stroka-keys), null = public
+alter table public.packs add column if not exists access_key text;
 
 create index if not exists pack_files_pack_id_idx on public.pack_files (pack_id);
 
@@ -99,9 +101,31 @@ drop policy if exists "admins: lire sa ligne" on public.admins;
 create policy "admins: lire sa ligne" on public.admins
     for select to authenticated using (user_id = auth.uid());
 
+-- Clés d'accès envoyées par le launcher : en-tête « x-stroka-keys: CLE1,CLE2 »
+create or replace function public.request_access_keys()
+returns text[]
+language sql
+stable
+as $$
+    select coalesce(
+        string_to_array(nullif(current_setting('request.headers', true)::json ->> 'x-stroka-keys', ''), ','),
+        '{}'::text[]
+    );
+$$;
+
+-- Pack visible par la requête : publié et public, ou publié et privé avec sa clé (les admins voient tout)
+create or replace function public.pack_visible(p_published boolean, p_access_key text)
+returns boolean
+language sql
+stable
+as $$
+    select public.is_admin()
+        or (p_published and (nullif(p_access_key, '') is null or p_access_key = any(public.request_access_keys())));
+$$;
+
 drop policy if exists "packs: lecture" on public.packs;
 create policy "packs: lecture" on public.packs
-    for select to anon, authenticated using (published or public.is_admin());
+    for select to anon, authenticated using (public.pack_visible(published, access_key));
 
 drop policy if exists "packs: écriture admin" on public.packs;
 create policy "packs: écriture admin" on public.packs
@@ -110,7 +134,7 @@ create policy "packs: écriture admin" on public.packs
 drop policy if exists "fichiers: lecture" on public.pack_files;
 create policy "fichiers: lecture" on public.pack_files
     for select to anon, authenticated using (
-        exists (select 1 from public.packs p where p.id = pack_id and (p.published or public.is_admin()))
+        exists (select 1 from public.packs p where p.id = pack_id and public.pack_visible(p.published, p.access_key))
     );
 
 drop policy if exists "fichiers: écriture admin" on public.pack_files;
@@ -122,6 +146,8 @@ grant select on public.packs, public.pack_files to anon, authenticated;
 grant insert, update, delete on public.packs, public.pack_files to authenticated;
 grant select on public.admins to authenticated;
 grant execute on function public.is_admin() to anon, authenticated;
+grant execute on function public.request_access_keys() to anon, authenticated;
+grant execute on function public.pack_visible(boolean, text) to anon, authenticated;
 
 -- ---------------------------------------------------------------------------
 -- Stockage : bucket public « packs » (lecture libre, envoi réservé aux admins)

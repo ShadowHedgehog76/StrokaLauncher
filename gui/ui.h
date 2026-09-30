@@ -40,6 +40,7 @@ int ui_text_input(const char *id, Rectangle r, char *buf, size_t cap, const char
 void ui_focus(const char *id);
 void ui_unfocus(void);
 int ui_has_focus(const char *id);
+int ui_any_focus(void); /* un champ de texte a le clavier */
 
 /* Liste déroulante : retourne 1 quand la sélection change. items peut être vide (loading = spinner). */
 int ui_dropdown(const char *id, Rectangle r, const char *const *items, int count, int *selected, int loading,

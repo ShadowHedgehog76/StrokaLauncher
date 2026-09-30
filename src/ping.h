@@ -6,6 +6,10 @@ typedef struct {
     int players, max_players;
     int latency_ms;
     char version[64];
+    /* échantillon de joueurs connectés envoyé par le serveur (12 au plus en vanilla, vide si masqué) */
+    int nsample;
+    char sample_name[16][20];
+    char sample_id[16][40];
 } server_status;
 
 /* Interroge un serveur Minecraft (protocole « Server List Ping »), adresse « hôte[:port] ». */
