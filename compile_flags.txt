@@ -1,0 +1,6 @@
+-std=gnu11
+-Isrc
+-Igui
+-Iadmin
+-Ithird_party/raylib/src
+-Ibuild

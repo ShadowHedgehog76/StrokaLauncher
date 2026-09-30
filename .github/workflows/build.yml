@@ -1,0 +1,152 @@
+# Compilation de Stroka Launcher pour macOS, Linux et Windows.
+# À chaque push : paquets disponibles dans l'onglet Actions (artefacts).
+# Stroka Admin (outil privé) n'est pas publié : son dossier admin/ n'est pas dans le dépôt.
+# Tag « v* » (ex : git tag v1.0.0 && git push origin v1.0.0) : release GitHub avec les paquets.
+#
+# Secrets du dépôt (Settings → Secrets and variables → Actions) :
+#   SUPABASE_URL  https://xxxx.supabase.co
+#   SUPABASE_KEY  clé publishable (sb_publishable_…) — jamais la clé service_role / sb_secret_…
+
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS (universel)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Identifiants Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: printf 'SUPABASE_URL=%s\nSUPABASE_KEY=%s\n' "$SUPABASE_URL" "$SUPABASE_KEY" > supabase.env
+
+      - name: Copie pour la version Intel
+        run: rsync -a --exclude .git ./ ../x86_64/
+
+      - name: Compilation Apple Silicon
+        run: make -j4 all app
+
+      - name: Compilation Intel
+        run: make -C ../x86_64 -j4 CC="clang -arch x86_64" HOSTCC=cc StrokaLauncher
+
+      - name: Application universelle
+        run: |
+          lipo -create StrokaLauncher ../x86_64/StrokaLauncher -output build/StrokaLauncher.app/Contents/MacOS/StrokaLauncher
+          codesign --force --deep -s - build/StrokaLauncher.app
+          mkdir -p dist
+          ditto -c -k --keepParent build/StrokaLauncher.app dist/StrokaLauncher-macOS.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*
+
+  linux:
+    name: Linux (AppImage — Ubuntu, Arch, SteamOS…)
+    # 22.04 : glibc assez ancienne pour tourner sur les distributions récentes (Arch, SteamOS 3, Ubuntu 22.04+)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dépendances
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libcurl4-openssl-dev zlib1g-dev libx11-dev libxrandr-dev \
+            libxinerama-dev libxcursor-dev libxi-dev libgl1-mesa-dev libfuse2 imagemagick
+
+      - name: Identifiants Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: printf 'SUPABASE_URL=%s\nSUPABASE_KEY=%s\n' "$SUPABASE_URL" "$SUPABASE_KEY" > supabase.env
+
+      - name: Compilation
+        run: make -j4 all
+
+      - name: AppImage
+        run: |
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage
+          mkdir -p dist
+          convert packaging/icon.png -resize 256x256 stroka-launcher.png
+          OUTPUT=dist/StrokaLauncher-x86_64.AppImage ./linuxdeploy-x86_64.AppImage --appimage-extract-and-run \
+            --appdir AppDir -e StrokaLauncher -d packaging/linux/stroka-launcher.desktop -i stroka-launcher.png --output appimage
+          tar -czf dist/StrokaLauncher-linux-x86_64.tar.gz StrokaLauncher stroka-cli \
+            packaging/linux/stroka-launcher.desktop packaging/icon.png
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            make zip
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-curl
+            mingw-w64-x86_64-zlib
+
+      - name: Identifiants Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: printf 'SUPABASE_URL=%s\nSUPABASE_KEY=%s\n' "$SUPABASE_URL" "$SUPABASE_KEY" > supabase.env
+
+      - name: Compilation
+        run: make -j4 all CC=gcc HOSTCC=gcc
+
+      - name: Paquet (exécutables + DLL)
+        run: |
+          mkdir -p "dist/Stroka Launcher"
+          cp StrokaLauncher.exe stroka-cli.exe "dist/Stroka Launcher/"
+          # DLL de MSYS2 nécessaires (curl, OpenSSL, zlib, winpthreads…)
+          for exe in *.exe; do
+            ldd "$exe" | awk '{print $3}' | grep -i '^/mingw64/' || true
+          done | sort -u | xargs -I{} cp -n {} "dist/Stroka Launcher/"
+          cd dist && zip -r StrokaLauncher-Windows-x64.zip "Stroka Launcher"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.zip
+
+  release:
+    name: Release GitHub
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

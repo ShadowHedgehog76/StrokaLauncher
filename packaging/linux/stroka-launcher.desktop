@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Stroka Launcher
+Comment=Launcher Minecraft des serveurs Stroka
+Exec=StrokaLauncher
+Icon=stroka-launcher
+Categories=Game;
+Terminal=false

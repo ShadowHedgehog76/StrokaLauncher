@@ -1,0 +1,24 @@
+# Compilation
+build/
+dist/
+AppDir-*/
+StrokaLauncher
+StrokaAdmin
+stroka-cli
+stroka
+*.exe
+*.o
+*.a
+*.AppImage
+third_party/raylib/src/*.o
+third_party/raylib/src/libraylib.a
+
+# Identifiants Supabase (URL + clé publishable) : voir supabase.env.example
+supabase.env
+
+# Système
+.DS_Store
+
+# Outils privés : app admin (sources, règles de compilation, musique des menus du jeu)
+admin/
+assets/music/
