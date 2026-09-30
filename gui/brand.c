@@ -19,6 +19,10 @@ static int render_png(const char *path, int w, int h, paint_fn paint, const void
     mkdirs_parent(path);
     RenderTexture2D rt = LoadRenderTexture(w, h);
     if (!rt.id) return -1;
+    /* appelé parfois pendant le dessin d'une liste découpée : la découpe (en coordonnées écran) ne doit pas
+     * rogner le rendu hors écran */
+    rlDrawRenderBatchActive();
+    rlDisableScissorTest();
     BeginTextureMode(rt);
     ClearBackground(BLANK);
     /* conserve l'alpha tel quel (sinon les pixels semi-transparents s'assombrissent) */

@@ -533,7 +533,8 @@ static Texture2D load_rounded_logo(const char *path) {
 /* Icône prédéfinie (packs solo) : générée une fois dans le cache ; à libérer */
 static char *preset_logo_path(int i) {
     if (i < 0 || i >= brand_logo_preset_count()) i = 0;
-    char *path = xasprintf("%s/cache/brand/preset_%d.png", data_dir(), i);
+    /* « v2 » : les icônes générées par les versions précédentes pouvaient être rognées */
+    char *path = xasprintf("%s/cache/brand/preset_v2_%d.png", data_dir(), i);
     if (!file_exists(path)) {
         mkdirs_parent(path);
         brand_logo_preset(path, i, 256);
@@ -3745,6 +3746,8 @@ int main(void) {
     SetExitKey(KEY_NULL);
     SetTargetFPS(60);
     fonts_load();
+    /* icônes des packs solo : générées ici, hors de toute phase de dessin */
+    for (int i = 0; i < brand_logo_preset_count(); i++) free(preset_logo_path(i));
     scene_init((unsigned)time(NULL));
     refresh_packs();
     spawn(ping_thread, NULL);
