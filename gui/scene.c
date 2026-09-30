@@ -45,12 +45,15 @@ typedef struct {
     Color cloud, cloud_edge;
     Color top[3], dirt[3], fill[3], haze[3]; /* couches : lointaine, milieu, proche */
     Color trunk, leaves;
-    int trees;                      /* 0 : pas d'arbres (désert) */
+    int trees;                      /* végétation : PLANT_* (0 : aucune) */
     Color particle;
     int particle_dir;               /* -1 montent, +1 tombent, 0 aucune */
     float particle_speed;           /* facteur de vitesse */
     int fireflies;                  /* scintillement (lucioles) */
 } theme_t;
+
+/* Végétation d'un thème */
+enum { PLANT_NONE, PLANT_TREE, PLANT_FUNGUS, PLANT_CHORUS, PLANT_CACTUS };
 
 #define C(r, g, b) {r, g, b, 255}
 #define CA(r, g, b, a) {r, g, b, a}
@@ -80,17 +83,17 @@ static const theme_t THEMES[] = {
      CA(255, 150, 60, 110), C(0, 0, 0), C(0, 0, 0), C(60, 20, 20), C(124, 42, 30),
      {C(112, 34, 34), C(150, 30, 42), C(172, 36, 46)}, {C(82, 24, 26), C(100, 30, 30), C(122, 40, 36)},
      {C(64, 18, 22), C(60, 16, 20), C(40, 10, 14)}, {C(164, 52, 24), C(110, 26, 20), C(50, 10, 10)}, C(104, 32, 52),
-     C(184, 32, 44), 1, C(255, 140, 50), -1, 1.4f, 0},
+     C(184, 32, 44), PLANT_FUNGUS, C(255, 140, 50), -1, 1.4f, 0},
     {"end", "L'End", C(8, 4, 16), C(26, 10, 40), C(72, 30, 92), C(20, 10, 28), 1, 2, CA(180, 90, 255, 50),
      CA(210, 140, 255, 80), C(0, 0, 0), C(0, 0, 0), C(40, 20, 60), C(92, 52, 122),
      {C(140, 132, 100), C(204, 198, 150), C(222, 216, 166)}, {C(112, 102, 82), C(152, 142, 112), C(172, 162, 122)},
      {C(80, 70, 72), C(60, 40, 70), C(30, 18, 40)}, {C(72, 30, 92), C(50, 20, 70), C(20, 10, 28)}, C(140, 92, 160),
-     C(172, 112, 192), 1, C(204, 132, 255), -1, 0.6f, 1},
+     C(172, 112, 192), PLANT_CHORUS, C(204, 132, 255), -1, 0.6f, 1},
     {"desert", "Désert", C(46, 74, 140), C(226, 148, 92), C(255, 204, 128), C(200, 150, 90), 0, 0, CA(255, 200, 120, 90),
      CA(255, 222, 150, 130), C(255, 220, 140), C(255, 242, 196), C(250, 222, 194), C(240, 182, 142),
      {C(212, 150, 100), C(232, 202, 142), C(242, 216, 152)}, {C(190, 130, 90), C(212, 172, 112), C(222, 182, 122)},
      {C(170, 116, 80), C(190, 150, 100), C(160, 120, 80)}, {C(255, 204, 128), C(240, 180, 110), C(180, 130, 80)},
-     C(80, 140, 60), C(92, 160, 72), 0, C(255, 230, 190), -1, 0.5f, 0},
+     C(80, 140, 60), C(92, 160, 72), PLANT_CACTUS, C(255, 230, 190), -1, 0.5f, 0},
 };
 #define THEME_COUNT ((int)(sizeof THEMES / sizeof THEMES[0]))
 
@@ -199,7 +202,87 @@ static int column_height(const layer_t *L, int world_x, int idx) {
 
 static int deco_blocks_tree(int idx, int wx);
 
-/* Une colonne de relief (et son arbre éventuel) */
+/* Bloc de végétation (coordonnées en blocs depuis le pied de la plante) */
+static void pblock(float x, float top, float b, float bx, float by, float w, float h, Color c) {
+    DrawRectangleRec((Rectangle){x + bx * b + (1 - w) * b / 2, top - (by + 1) * b + (1 - h) * b, w * b + 0.5f, h * b + 0.5f}, c);
+}
+
+/* Végétation du thème : arbre, champignon géant (Nether), plante de chorus (End), cactus (désert) */
+static void draw_plant(const theme_t *T, const layer_t *L, int idx, int wx, float x, float top) {
+    unsigned h = hash(wx, 99u + idx);
+    float b = L->block;
+    float fade = idx == 1 ? 0.45f : 0.15f;
+    Color trunk = mix(T->trunk, T->fill[idx], 0.45f), leaves = mix(T->leaves, T->fill[idx], fade);
+    switch (T->trees) {
+    case PLANT_TREE:
+        if (h % 17) return;
+        for (int k = 0; k < 3; k++) pblock(x, top, b, 0, k, 1, 1, trunk);
+        pblock(x, top, b, -2, 3, 5, 2, leaves);
+        pblock(x, top, b, -1, 5, 3, 1, leaves);
+        DrawRectangleRec((Rectangle){x - 2 * b, top - 5 * b, 5 * b, b * 0.2f}, with_alpha(WHITE, 0.06f));
+        return;
+    case PLANT_FUNGUS: { /* champignon géant carmin (parfois biscornu, bleu-vert) : pied, chapeau, champilampes */
+        if (h % 23) return;
+        int warped = (h >> 5) % 3 == 0, stem_h = 3 + (h >> 7) % 2;
+        Color stem = warped ? mix((Color){74, 56, 92, 255}, T->fill[idx], fade) : trunk;
+        Color cap = warped ? mix((Color){22, 124, 118, 255}, T->fill[idx], fade) : leaves;
+        Color light = mix((Color){255, 172, 84, 255}, T->fill[idx], fade * 0.5f);
+        for (int k = 0; k < stem_h; k++) pblock(x, top, b, 0, k, 1, 1, stem);
+        pblock(x, top, b, -2, stem_h, 5, 1, cap);
+        pblock(x, top, b, -1, stem_h + 1, 3, 1, cap);
+        pblock(x, top, b, -2, stem_h - 1, 1, 1, cap); /* bords du chapeau qui pendent */
+        pblock(x, top, b, 2, stem_h - 1, 1, 1, cap);
+        if (idx) { /* champilampes (lumineuses) sur les couches proches */
+            pblock(x, top, b, (h >> 9) % 2 ? -1 : 1, stem_h, 1, 1, light);
+            if ((h >> 11) % 2) pblock(x, top, b, 0, stem_h + 1, 1, 1, light);
+        }
+        return;
+    }
+    case PLANT_CHORUS: { /* plante de chorus : tige fine ramifiée, fleurs pâles au bout des branches */
+        if (h % 19) return;
+        Color stalk = leaves, dark = mix(trunk, BLACK, 0.25f), flower = mix((Color){232, 212, 246, 255}, T->fill[idx], fade);
+        const float t = 0.5f; /* épaisseur de la tige, en blocs */
+        int hmain = 3 + h % 3;
+        for (int k = 0; k < hmain; k++) pblock(x, top, b, 0, k, t, 1, k % 2 ? stalk : mix(stalk, dark, 0.4f));
+        pblock(x, top, b, 0, hmain, 0.86f, 0.86f, flower);
+        /* branches : raccord horizontal depuis la tige, montée d'un ou deux blocs, fleur au bout */
+        for (int side = -1; side <= 1; side += 2) {
+            unsigned hs = h >> (side < 0 ? 3 : 13);
+            if (hs % 3 == 0) continue; /* pas de branche de ce côté */
+            int at = 1 + hs % (hmain - 1), up = 1 + (hs >> 2) % 2;
+            if (at + up >= hmain + 1) up = 1;
+            float cy = top - (at + 1) * b + (1 - t) * b / 2; /* raccord : du milieu de la tige au milieu de la branche */
+            DrawRectangleRec((Rectangle){x + b * (side < 0 ? -0.5f : 0.5f), cy, b + 0.5f, t * b}, stalk);
+            for (int k = 1; k <= up; k++) pblock(x, top, b, side, at + k, t, 1, k % 2 ? mix(stalk, dark, 0.4f) : stalk);
+            pblock(x, top, b, side, at + up + 1, 0.86f, 0.86f, flower);
+        }
+        return;
+    }
+    case PLANT_CACTUS: { /* cactus (1 à 3 blocs), parfois un buisson mort */
+        if (h % 11 == 0) {
+            int hc = 1 + (h >> 4) % 3;
+            Color dark = mix(trunk, BLACK, 0.25f);
+            for (int k = 0; k < hc; k++) {
+                pblock(x, top, b, 0, k, 0.84f, 1, leaves);
+                /* rayures verticales et épines */
+                DrawRectangleRec((Rectangle){x + b * 0.36f, top - (k + 1) * b, b * 0.1f, b}, dark);
+                DrawRectangleRec((Rectangle){x + b * 0.6f, top - (k + 1) * b, b * 0.1f, b}, dark);
+                DrawRectangleRec((Rectangle){x + b * 0.02f, top - (k + 0.5f) * b, b * 0.08f, b * 0.08f}, dark);
+                DrawRectangleRec((Rectangle){x + b * 0.9f, top - (k + 0.3f) * b, b * 0.08f, b * 0.08f}, dark);
+            }
+            pblock(x, top, b, 0, hc - 1, 0.84f, 0.12f, mix(leaves, WHITE, 0.15f)); /* dessus plus clair */
+        } else if (h % 23 == 5) {
+            Color twig = mix((Color){140, 100, 52, 255}, T->fill[idx], fade);
+            DrawRectangleRec((Rectangle){x + b * 0.45f, top - b * 0.7f, b * 0.12f, b * 0.7f}, twig);
+            DrawRectangleRec((Rectangle){x + b * 0.2f, top - b * 0.8f, b * 0.12f, b * 0.45f}, twig);
+            DrawRectangleRec((Rectangle){x + b * 0.7f, top - b * 0.9f, b * 0.12f, b * 0.5f}, twig);
+        }
+        return;
+    }
+    }
+}
+
+/* Une colonne de relief (et sa végétation éventuelle) */
 static void draw_column(const theme_t *T, const layer_t *L, int idx, int wx, float x, float top, float h) {
     float shade = (hash(wx, (unsigned)idx) % 100) / 100.0f * 0.12f;
     DrawRectangleRec((Rectangle){x, top + 2 * L->block, L->block + 0.5f, h - top}, T->fill[idx]);
@@ -208,16 +291,7 @@ static void draw_column(const theme_t *T, const layer_t *L, int idx, int wx, flo
     /* reflet sur l'arête supérieure */
     DrawRectangleRec((Rectangle){x, top, L->block + 0.5f, L->block * 0.18f}, with_alpha(WHITE, 0.08f));
 
-    /* Arbres en blocs */
-    if (T->trees && L->trees && hash(wx, 99u + idx) % 17 == 0 && !deco_blocks_tree(idx, wx)) {
-        float b = L->block;
-        Color trunk = mix(T->trunk, T->fill[idx], 0.45f);
-        Color leaves = mix(T->leaves, T->fill[idx], idx == 1 ? 0.45f : 0.15f);
-        for (int k = 1; k <= 3; k++) DrawRectangleRec((Rectangle){x, top - k * b, b + 0.5f, b}, trunk);
-        DrawRectangleRec((Rectangle){x - 2 * b, top - 5 * b, 5 * b, 2 * b}, leaves);
-        DrawRectangleRec((Rectangle){x - b, top - 6 * b, 3 * b, b}, leaves);
-        DrawRectangleRec((Rectangle){x - 2 * b, top - 5 * b, 5 * b, b * 0.2f}, with_alpha(WHITE, 0.06f));
-    }
+    if (T->trees && L->trees && !deco_blocks_tree(idx, wx)) draw_plant(T, L, idx, wx, x, top);
 }
 
 /* ---------- décor des mods ---------- */

@@ -3237,13 +3237,136 @@ typedef struct {
     char url[1024], sha1[41], path[1024];
 } music_job;
 
+/* Lecture dans un fil dédié : la musique continue d'être alimentée (et ses fondus de se faire) même quand la
+ * boucle d'affichage est figée (fenêtre réduite, lancement du jeu…), sinon la carte son rejoue un bout de tampon
+ * et grésille. L'interface indique seulement quoi jouer et si c'est audible. */
 static struct {
-    Music m;
-    int loaded, paused, audio_ready;
-    float vol;
-    char loaded_url[1024]; /* musique chargée */
-    char want_url[1024];   /* musique demandée (téléchargement lancé) */
+    pthread_mutex_t mu;
+    char path[1024]; /* musique voulue (fichier prêt), vide : aucune */
+    int audible;     /* 0 : fondu de sortie puis pause */
+    int quit;
+    int started;
+    pthread_t th;
+} AQ = {.mu = PTHREAD_MUTEX_INITIALIZER};
+
+static struct {
+    char want_url[1024]; /* musique demandée (téléchargement lancé) */
 } MU;
+
+/* Musique décodée en mémoire, jouée en boucle par nos soins : fondu de 20 ms au début et à la fin (un fichier
+ * dont les premiers échantillons sont abîmés ne claque plus à chaque tour), bouclage sans trou */
+typedef struct {
+    Wave w;
+    AudioStream st;
+    long pos;      /* image suivante à envoyer */
+    int loaded;
+} track_t;
+
+#define AQ_CHUNK 8192 /* images par envoi (taille d'un demi-tampon du flux) */
+
+static int track_load(track_t *t, const char *path) {
+    memset(t, 0, sizeof *t);
+    t->w = LoadWave(path);
+    if (!t->w.data || !t->w.frameCount || t->w.channels < 1 || t->w.channels > 2) {
+        UnloadWave(t->w);
+        return -1;
+    }
+    WaveFormat(&t->w, t->w.sampleRate, 16, t->w.channels);
+    short *pcm = t->w.data;
+    long frames = t->w.frameCount, fade = t->w.sampleRate / 50;
+    for (long i = 0; i < fade && i < frames / 2; i++)
+        for (unsigned c = 0; c < t->w.channels; c++) {
+            float g = (float)i / (float)fade;
+            pcm[i * t->w.channels + c] = (short)(pcm[i * t->w.channels + c] * g);
+            pcm[(frames - 1 - i) * t->w.channels + c] = (short)(pcm[(frames - 1 - i) * t->w.channels + c] * g);
+        }
+    SetAudioStreamBufferSizeDefault(AQ_CHUNK);
+    t->st = LoadAudioStream(t->w.sampleRate, 16, t->w.channels);
+    if (!IsAudioStreamValid(t->st)) {
+        UnloadWave(t->w);
+        return -1;
+    }
+    t->loaded = 1;
+    return 0;
+}
+
+/* Remplit les demi-tampons consommés, en repartant au début à la fin du morceau */
+static void track_feed(track_t *t) {
+    static short buf[AQ_CHUNK * 2];
+    const short *pcm = t->w.data;
+    int ch = (int)t->w.channels;
+    while (IsAudioStreamProcessed(t->st)) {
+        for (int i = 0; i < AQ_CHUNK; i++) {
+            for (int c = 0; c < ch; c++) buf[i * ch + c] = pcm[t->pos * ch + c];
+            if (++t->pos >= (long)t->w.frameCount) t->pos = 0;
+        }
+        UpdateAudioStream(t->st, buf, AQ_CHUNK);
+    }
+}
+
+static void track_unload(track_t *t) {
+    if (!t->loaded) return;
+    StopAudioStream(t->st);
+    UnloadAudioStream(t->st);
+    UnloadWave(t->w);
+    t->loaded = 0;
+}
+
+static void *audio_thread(void *arg) {
+    (void)arg;
+    InitAudioDevice();
+    if (!IsAudioDeviceReady()) return NULL;
+    track_t t = {0};
+    int paused = 0;
+    float vol = 0;
+    char cur[1024] = "", failed[1024] = "";
+    long long last = mono_ms();
+    for (;;) {
+        pthread_mutex_lock(&AQ.mu);
+        char want[1024];
+        snprintf(want, sizeof want, "%s", AQ.path);
+        int audible = AQ.audible, quit = AQ.quit;
+        pthread_mutex_unlock(&AQ.mu);
+        long long now = mono_ms();
+        float dt = (float)(now - last) / 1000.0f;
+        last = now;
+        if (dt > 0.1f) dt = 0.1f;
+
+        int switching = t.loaded && strcmp(cur, want) != 0;
+        float target = audible && want[0] && !switching && !quit ? 0.45f : 0.0f;
+        vol = target > vol ? fminf(target, vol + dt * 0.3f) : fmaxf(target, vol - dt * (quit ? 3.0f : 0.6f));
+        if (t.loaded) {
+            if (vol <= 0 && (switching || quit)) {
+                track_unload(&t);
+                cur[0] = '\0';
+            } else if (vol <= 0 && !audible) {
+                if (!paused) PauseAudioStream(t.st); /* reprend au même endroit */
+                paused = 1;
+            } else {
+                if (paused) ResumeAudioStream(t.st);
+                paused = 0;
+                SetAudioStreamVolume(t.st, vol);
+                track_feed(&t);
+            }
+        }
+        if (quit && !t.loaded) break;
+        if (!t.loaded && want[0] && strcmp(want, failed) != 0) {
+            if (track_load(&t, want) == 0) {
+                SetAudioStreamVolume(t.st, 0);
+                track_feed(&t);
+                PlayAudioStream(t.st);
+                paused = 0;
+                vol = 0;
+                snprintf(cur, sizeof cur, "%s", want);
+            } else {
+                snprintf(failed, sizeof failed, "%s", want); /* fichier illisible : on n'insiste pas */
+            }
+        }
+        sleep_ms(10);
+    }
+    CloseAudioDevice();
+    return NULL;
+}
 
 static void *music_thread(void *arg) {
     music_job *j = arg;
@@ -3282,21 +3405,13 @@ static const pack_file *pack_music(const pack *p) {
     return any;
 }
 
-static void music_unload(void) {
-    if (!MU.loaded) return;
-    StopMusicStream(MU.m);
-    UnloadMusicStream(MU.m);
-    MU.loaded = 0;
-    MU.loaded_url[0] = '\0';
-}
-
 static void update_music(const snapshot *s) {
     const pack_file *f = U.cfg.install_music ? pack_music(current_pack()) : NULL;
     const char *url = f ? f->url : "";
     int audible = f && !s->game_running && !IsWindowMinimized();
 
     /* musique du pack affiché : téléchargée une fois (en arrière-plan) */
-    if (f && strcmp(MU.want_url, url) != 0 && strcmp(MU.loaded_url, url) != 0) {
+    if (f && strcmp(MU.want_url, url) != 0) {
         snprintf(MU.want_url, sizeof MU.want_url, "%s", url);
         music_job *j = calloc(1, sizeof *j);
         snprintf(j->url, sizeof j->url, "%s", url);
@@ -3312,56 +3427,27 @@ static void update_music(const snapshot *s) {
         spawn(music_thread, j);
     }
 
-    /* une autre musique (autre pack) ou plus de musique : fondu de sortie avant de changer */
-    int switching = MU.loaded && strcmp(MU.loaded_url, url) != 0;
-    if (MU.loaded) {
-        float dt = GetFrameTime();
-        float target = audible && !switching ? 0.45f : 0.0f;
-        MU.vol = target > MU.vol ? fminf(target, MU.vol + dt * 0.3f) : fmaxf(target, MU.vol - dt * 0.6f);
-        if (MU.vol <= 0 && switching) {
-            music_unload();
-        } else if (MU.vol <= 0 && !audible) {
-            if (!MU.paused) PauseMusicStream(MU.m); /* reprend au même endroit */
-            MU.paused = 1;
-        } else {
-            if (MU.paused) ResumeMusicStream(MU.m);
-            MU.paused = 0;
-            SetMusicVolume(MU.m, MU.vol);
-            UpdateMusicStream(MU.m);
-        }
-    }
+    /* ce que le fil audio doit jouer */
+    char path[1024] = "";
+    LOCK();
+    if (f && S.music_ready == 1 && strcmp(S.music_url, url) == 0) snprintf(path, sizeof path, "%s", S.music_path);
+    UNLOCK();
+    pthread_mutex_lock(&AQ.mu);
+    snprintf(AQ.path, sizeof AQ.path, "%s", path);
+    AQ.audible = audible;
+    int start = !AQ.started && path[0];
+    if (start) AQ.started = 1;
+    pthread_mutex_unlock(&AQ.mu);
+    if (start && pthread_create(&AQ.th, NULL, audio_thread, NULL) != 0) AQ.started = 0;
+}
 
-    /* chargement une fois le fichier prêt */
-    if (!MU.loaded && f && strcmp(MU.loaded_url, url) != 0) {
-        LOCK();
-        int ready = S.music_ready == 1 && strcmp(S.music_url, url) == 0;
-        char path[1024];
-        snprintf(path, sizeof path, "%s", S.music_path);
-        UNLOCK();
-        if (ready) {
-            if (!MU.audio_ready) {
-                InitAudioDevice();
-                MU.audio_ready = IsAudioDeviceReady() ? 1 : -1;
-            }
-            if (MU.audio_ready == 1) {
-                /* tampons d'une demi-seconde (au lieu de ~33 ms) : une image lente ne vide plus le tampon, donc
-                 * pas de grésillement pendant un chargement */
-                SetAudioStreamBufferSizeDefault(22050);
-                MU.m = LoadMusicStream(path);
-                if (IsMusicValid(MU.m)) {
-                    MU.m.looping = true;
-                    MU.vol = 0;
-                    MU.paused = 0;
-                    SetMusicVolume(MU.m, 0);
-                    PlayMusicStream(MU.m);
-                    MU.loaded = 1;
-                    snprintf(MU.loaded_url, sizeof MU.loaded_url, "%s", url);
-                } else {
-                    snprintf(MU.loaded_url, sizeof MU.loaded_url, "%s", url); /* fichier illisible : on n'insiste pas */
-                }
-            }
-        }
-    }
+/* Fin du launcher : fondu rapide puis arrêt du fil audio */
+static void music_shutdown(void) {
+    pthread_mutex_lock(&AQ.mu);
+    AQ.quit = 1;
+    int started = AQ.started;
+    pthread_mutex_unlock(&AQ.mu);
+    if (started) pthread_join(AQ.th, NULL);
 }
 
 /* ---------- page Paramètres ---------- */
@@ -3889,8 +3975,7 @@ int main(void) {
     S.cancel = 1;
     UNLOCK();
     unload_gfx();
-    music_unload();
-    if (MU.audio_ready == 1) CloseAudioDevice();
+    music_shutdown();
     if (U.has_head) UnloadTexture(U.head);
     fonts_unload();
     CloseWindow();
