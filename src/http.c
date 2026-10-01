@@ -31,6 +31,9 @@ static size_t mem_write(char *ptr, size_t size, size_t nmemb, void *ud) {
 /* Windows : certificats racine de Mozilla (intégrés) en plus du magasin de Windows. Le magasin de Windows seul ne
  * suffit pas partout : sur certains PC, des racines n'y ont jamais été téléchargées (mises à jour des racines
  * désactivées…) et des sites comme Modrinth ou GitHub y étaient refusés. */
+static void probe_issuer(const char *url);
+static char g_issuer[160]; /* émetteur du certificat présenté à la place du vrai (diagnostic) */
+
 static void use_system_ca(CURL *h) {
 #ifdef _WIN32
 #ifdef CURLOPT_CAINFO_BLOB
@@ -80,7 +83,13 @@ int http_request_ex(const char *method, const char *url, const char *const *head
     curl_slist_free_all(hl);
     curl_easy_cleanup(h);
     if (rc != CURLE_OK) {
-        set_error("réseau : %s (%s)", curl_easy_strerror(rc), url);
+        if (rc == CURLE_PEER_FAILED_VERIFICATION) {
+            probe_issuer(url);
+            if (g_issuer[0]) set_error("certificat refusé pour %s, émis par « %s » : antivirus ou filtre qui intercepte le HTTPS ?", url, g_issuer);
+            else set_error("réseau : %s (%s)", curl_easy_strerror(rc), url);
+        } else {
+            set_error("réseau : %s (%s)", curl_easy_strerror(rc), url);
+        }
         return -1;
     }
     return 0;
@@ -157,7 +166,65 @@ typedef struct {
     char *tmp;
     sha1_ctx sha;
     int tries;
+    int insecure; /* certificat refusé (HTTPS intercepté) : retéléchargé sans vérification, empreinte SHA1 contrôlée */
 } xfer;
+
+/* ---------- HTTPS intercepté (antivirus, filtre, proxy) ---------- */
+
+static int g_insecure_noticed;
+
+/* « Issuer: C = US, O = Avast…, CN = Avast Web/Mail Shield Root » -> nom lisible (CN, sinon O) */
+static const char *field(const char *v, const char *key) {
+    size_t kl = strlen(key);
+    for (const char *p = v; (p = strstr(p, key)); p += kl) {
+        if (p != v && p[-1] != ' ' && p[-1] != ',' && p[-1] != '/' && p[-1] != ':') continue; /* « CN » dans un autre mot */
+        const char *q = p + kl;
+        while (*q == ' ') q++;
+        if (*q != '=') continue;
+        q++;
+        while (*q == ' ') q++;
+        return q;
+    }
+    return NULL;
+}
+
+static void issuer_name(const char *line, char *out, size_t n) {
+    const char *v = strchr(line, ':');
+    v = v ? v + 1 : line;
+    const char *p = field(v, "CN");
+    if (!p) p = field(v, "O");
+    if (!p) p = v;
+    size_t k = 0;
+    while (p[k] && p[k] != ',' && k + 1 < n) k++;
+    while (k && p[k - 1] == ' ') k--;
+    snprintf(out, n, "%.*s", (int)k, p);
+}
+
+static void read_issuer(CURL *h) {
+    struct curl_certinfo *ci = NULL;
+    if (curl_easy_getinfo(h, CURLINFO_CERTINFO, &ci) != CURLE_OK || !ci || ci->num_of_certs < 1) return;
+    /* dernier certificat de la chaîne présentée : la racine (celle de l'intercepteur) */
+    for (struct curl_slist *sl = ci->certinfo[ci->num_of_certs - 1]; sl; sl = sl->next)
+        if (strncmp(sl->data, "Issuer:", 7) == 0) {
+            issuer_name(sl->data, g_issuer, sizeof g_issuer);
+            return;
+        }
+}
+
+/* Émetteur du certificat que présente cette adresse (connexion sans vérification, rien n'est téléchargé) */
+static void probe_issuer(const char *url) {
+    CURL *h = curl_easy_init();
+    if (!h) return;
+    curl_easy_setopt(h, CURLOPT_URL, url);
+    curl_easy_setopt(h, CURLOPT_NOBODY, 1L);
+    curl_easy_setopt(h, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(h, CURLOPT_SSL_VERIFYHOST, 0L);
+    curl_easy_setopt(h, CURLOPT_CERTINFO, 1L);
+    curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(h, CURLOPT_TIMEOUT, 15L);
+    if (curl_easy_perform(h) == CURLE_OK) read_issuer(h);
+    curl_easy_cleanup(h);
+}
 
 static size_t file_write(char *ptr, size_t size, size_t nmemb, void *ud) {
     xfer *x = ud;
@@ -192,6 +259,12 @@ static int start_xfer(CURLM *m, xfer *x) {
     curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, file_write);
     curl_easy_setopt(h, CURLOPT_WRITEDATA, x);
     curl_easy_setopt(h, CURLOPT_PRIVATE, x);
+    if (x->insecure) {
+        /* le contenu reste vérifié : son empreinte SHA1 vient d'une source sûre (pack Supabase, manifeste Mojang…) */
+        curl_easy_setopt(h, CURLOPT_SSL_VERIFYPEER, 0L);
+        curl_easy_setopt(h, CURLOPT_SSL_VERIFYHOST, 0L);
+        curl_easy_setopt(h, CURLOPT_CERTINFO, 1L);
+    }
     curl_multi_add_handle(m, h);
     x->h = h;
     return 0;
@@ -212,11 +285,23 @@ static int finish_xfer(xfer *x, CURLcode res) {
         return 1;
     }
     unlink(x->tmp);
+    /* certificat refusé : connexion interceptée. Fichier à l'empreinte connue : nouvel essai sans vérifier le
+     * certificat, l'empreinte SHA1 garantissant que le fichier n'a pas été modifié en route. */
+    if (res == CURLE_PEER_FAILED_VERIFICATION && x->it->sha1[0] && !x->insecure) {
+        x->insecure = 1;
+        return 0;
+    }
     if (++x->tries < MAX_TRIES) return 0;
     /* raison d'abord : le message est souvent coupé à l'écran ; puis le fichier, puis l'adresse complète */
     const char *url = x->it->url, *name = strrchr(url, '/');
-    set_error("échec du téléchargement (%s) : %s — %s", res == CURLE_OK ? "fichier corrompu (SHA1 invalide)" : curl_easy_strerror(res),
-              name && name[1] ? name + 1 : url, url);
+    char why[256];
+    snprintf(why, sizeof why, "%s", res == CURLE_OK ? "fichier corrompu (SHA1 invalide)" : curl_easy_strerror(res));
+    if (res == CURLE_PEER_FAILED_VERIFICATION) {
+        probe_issuer(url);
+        if (g_issuer[0])
+            snprintf(why, sizeof why, "certificat refusé, émis par « %s » : antivirus ou filtre qui intercepte le HTTPS ?", g_issuer);
+    }
+    set_error("échec du téléchargement (%s) : %s — %s", why, name && name[1] ? name + 1 : url, url);
     return -1;
 }
 
@@ -264,12 +349,18 @@ int dl_run(dl_list *l, const char *label) {
             xfer *x;
             curl_easy_getinfo(h, CURLINFO_PRIVATE, (char **)&x);
             CURLcode res = msg->data.result;
+            if (x->insecure && res == CURLE_OK && !g_issuer[0]) read_issuer(h);
             curl_multi_remove_handle(m, h);
             curl_easy_cleanup(h);
             x->h = NULL;
             active--;
 
             int r = finish_xfer(x, res);
+            if (r == 1 && x->insecure && !g_insecure_noticed) {
+                g_insecure_noticed = 1;
+                report_notice("Connexion HTTPS interceptée%s%s%s : fichiers vérifiés par leur empreinte", g_issuer[0] ? " (« " : "",
+                              g_issuer, g_issuer[0] ? " »)" : "");
+            }
             if (r == 1) {
                 done++;
                 report_progress(label, done, total);
