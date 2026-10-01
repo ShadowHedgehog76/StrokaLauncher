@@ -53,9 +53,9 @@ Name: "{autodesktop}\Stroka Launcher"; Filename: "{app}\StrokaLauncher.exe"; Tas
 Filename: "{app}\StrokaLauncher.exe"; Description: "Lancer Stroka Launcher"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
-; restes des mises à jour automatiques (fichiers remplacés pendant que le launcher tournait)
-Type: files; Name: "{app}\*.old"
-Type: filesandordirs; Name: "{app}\.stroka-update"
+; tout le dossier du programme : il contient aussi les fichiers ajoutés par les mises à jour automatiques
+; (les données du joueur sont ailleurs, dans %APPDATA%\StrokaLauncher)
+Type: filesandordirs; Name: "{app}"
 
 [Code]
 { Les données (comptes, packs, mondes) restent dans %APPDATA%\StrokaLauncher : proposées à la suppression }

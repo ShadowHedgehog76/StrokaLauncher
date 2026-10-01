@@ -34,7 +34,7 @@ ifeq ($(PLATFORM),macos)
   CORE_LIBS := -lcurl -lz -lpthread
 else ifeq ($(PLATFORM),windows)
   GUI_LIBS  := -lopengl32 -lgdi32 -lwinmm -mwindows
-  CORE_LIBS := -lcurl -lz -lpthread -lws2_32 -lshell32 -lcomdlg32 -lole32
+  CORE_LIBS := -lcurl -lz -lpthread -lws2_32 -lshell32 -lcomdlg32 -lole32 -ladvapi32
   WIN_RES   := $(BUILD)/stroka_res.o
 else
   GUI_LIBS  := -lGL -lm -lpthread -ldl -lrt -lX11

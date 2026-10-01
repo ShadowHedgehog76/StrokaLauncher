@@ -7,7 +7,9 @@
 
 #include "util.h"
 
+#ifndef _WIN32
 static char g_launch[4096]; /* copie installée à lancer */
+#endif
 
 #if defined(__APPLE__)
 

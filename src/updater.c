@@ -11,6 +11,21 @@
 #include "util.h"
 #include "zip.h"
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
+/* Version installée affichée par Windows (Applications et fonctionnalités) : mise à jour après une mise à jour
+ * automatique, si le launcher a été installé avec Setup.exe (clé de désinstallation d'Inno Setup) */
+static void set_installed_version(const char *version) {
+    HKEY k;
+    const char *key = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{908D35FD-1DF3-4E4A-A392-3F3199F98EF2}_is1";
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, key, 0, KEY_SET_VALUE, &k) != ERROR_SUCCESS) return; /* version portable */
+    RegSetValueExA(k, "DisplayVersion", 0, REG_SZ, (const BYTE *)version, (DWORD)strlen(version) + 1);
+    RegCloseKey(k);
+}
+#endif
+
 #if defined(_WIN32)
 #define ASSET_NAME "StrokaLauncher-Windows-x64.zip"
 #elif defined(__APPLE__)
@@ -197,8 +212,12 @@ mac_out:
         free(old);
     }
     sv_free(&files);
-    if (rc == 0) snprintf(g_restart, sizeof g_restart, "%s", exe);
-    else set_error("certains fichiers n'ont pas pu être remplacés");
+    if (rc == 0) {
+        snprintf(g_restart, sizeof g_restart, "%s", exe);
+        set_installed_version(u->version);
+    } else {
+        set_error("certains fichiers n'ont pas pu être remplacés");
+    }
 win_out:
     remove_tree(stage);
     free(exe);
