@@ -118,7 +118,14 @@ $(CLI): $(BUILD)/src/main.o $(CORE_OBJ)
 # ---------- moteur ----------
 $(BUILD)/src/%.o: src/%.c src/*.h $(wildcard supabase.env)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(SB_DEFS) -c -o $@ $<
+	$(CC) $(CFLAGS) $(SB_DEFS) -I$(BUILD) -c -o $@ $<
+
+# Certificats racine de Mozilla (https://curl.se/ca/cacert.pem), intégrés pour Windows : utilisés en plus du
+# magasin de Windows, parfois incomplet (certificats racine jamais téléchargés sur certains PC)
+CACERT_H := $(BUILD)/cacert_data.h
+$(CACERT_H): packaging/cacert.pem $(BIN2C)
+	@$(BIN2C) packaging/cacert.pem > $@
+$(BUILD)/src/http.o: $(CACERT_H)
 
 $(BUILD)/cjson.o: $(CJSON)
 	@mkdir -p $(BUILD)

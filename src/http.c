@@ -24,9 +24,22 @@ static size_t mem_write(char *ptr, size_t size, size_t nmemb, void *ud) {
 }
 
 /* Certificats racines : sous Windows, ceux du système (le libcurl de MSYS2 chercherait un fichier absent) */
+#ifdef _WIN32
+#include "cacert_data.h" /* packaging/cacert.pem : certificats racine de Mozilla */
+#endif
+
+/* Windows : certificats racine de Mozilla (intégrés) en plus du magasin de Windows. Le magasin de Windows seul ne
+ * suffit pas partout : sur certains PC, des racines n'y ont jamais été téléchargées (mises à jour des racines
+ * désactivées…) et des sites comme Modrinth ou GitHub y étaient refusés. */
 static void use_system_ca(CURL *h) {
-#if defined(_WIN32) && defined(CURLSSLOPT_NATIVE_CA)
+#ifdef _WIN32
+#ifdef CURLOPT_CAINFO_BLOB
+    struct curl_blob blob = {cacert_pem, cacert_pem_len, CURL_BLOB_NOCOPY};
+    curl_easy_setopt(h, CURLOPT_CAINFO_BLOB, &blob);
+#endif
+#ifdef CURLSSLOPT_NATIVE_CA
     curl_easy_setopt(h, CURLOPT_SSL_OPTIONS, (long)CURLSSLOPT_NATIVE_CA);
+#endif
 #else
     (void)h;
 #endif
@@ -200,8 +213,10 @@ static int finish_xfer(xfer *x, CURLcode res) {
     }
     unlink(x->tmp);
     if (++x->tries < MAX_TRIES) return 0;
-    set_error("échec du téléchargement : %s (%s)", x->it->url,
-              res == CURLE_OK ? "SHA1 invalide" : curl_easy_strerror(res));
+    /* raison d'abord : le message est souvent coupé à l'écran ; puis le fichier, puis l'adresse complète */
+    const char *url = x->it->url, *name = strrchr(url, '/');
+    set_error("échec du téléchargement (%s) : %s — %s", res == CURLE_OK ? "fichier corrompu (SHA1 invalide)" : curl_easy_strerror(res),
+              name && name[1] ? name + 1 : url, url);
     return -1;
 }
 
