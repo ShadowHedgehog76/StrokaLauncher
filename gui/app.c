@@ -186,6 +186,7 @@ static struct {
     int bubble_solo;  /* bulle des packs : 0 en ligne, 1 solo */
     int players_open, players_pack; /* fenêtre des joueurs en ligne */
     int inst_open, quit_req;        /* proposition d'installation ; demande de fermeture (app relancée ailleurs) */
+    int uninst_open, uninst_data;   /* désinstallation : fenêtre, case « supprimer aussi mes données » */
     char inst_target[64];
     float bubble_t;   /* instant de la dernière bascule */
     mig_list mig;
@@ -1828,7 +1829,7 @@ static void icon_back_fn(Vector2 c, float s, Color col) {
 static void page_header(const char *title, const char *subtitle, float oy) {
     float x = SIDEBAR_W + 56;
     float bw = nav_pill_width("Accueil");
-    int esc = IsKeyPressed(KEY_ESCAPE) && !U.login_open && !U.um_open && !U.mig_open && !U.key_open && !U.players_open && !U.inst_open;
+    int esc = IsKeyPressed(KEY_ESCAPE) && !U.login_open && !U.um_open && !U.mig_open && !U.key_open && !U.players_open && !U.inst_open && !U.uninst_open;
     if (esc && ui_any_focus()) { /* Échap quitte d'abord le champ de texte */
         ui_unfocus();
         esc = 0;
@@ -2648,6 +2649,55 @@ static void draw_install_modal(float appear) {
         IsKeyPressed(KEY_ESCAPE))
         U.inst_open = 0;
     if (ui_button("inst-go", (Rectangle){card.x + w - 32 - 180, by, 180, 46}, "Installer", icon_download, BTN_PRIMARY, 1)) do_install();
+}
+
+static void draw_uninstall_modal(float appear) {
+    DrawRectangle(0, 0, WIN_W, WIN_H, with_alpha((Color){4, 4, 10, 255}, 0.72f * appear));
+    float w = 620, h = 344;
+    Rectangle card = {(WIN_W - w) / 2, (WIN_H - h) / 2 + 12 + (1 - ui_ease_out(appear)) * 30, w, h};
+    glow(card, 26, with_alpha(C_ERR, 0.25f), 0, 40);
+    rrect(card, 26, (Color){20, 18, 32, 252});
+    rrect_lines(card, 26, 1, C_BORDER);
+    if (appear < 0.99f && !U.uninst_open) return;
+    text(F.bold, "Désinstaller Stroka Launcher", card.x + 32, card.y + 30, 24, C_TEXT);
+#if defined(_WIN32)
+    const char *what = "Le launcher, ses raccourcis et son dossier sont supprimés.";
+#elif defined(__APPLE__)
+    const char *what = "L'app Stroka Launcher est supprimée.";
+#else
+    const char *what = "Le launcher, son raccourci dans le menu et son icône sont supprimés.";
+#endif
+    char msg[320];
+    snprintf(msg, sizeof msg, "%s Ton compte, tes packs installés, tes mondes et tes mods perso sont gardés : tu les retrouveras "
+                              "en réinstallant le launcher.", what);
+    text_wrap(F.regular, msg, card.x + 32, card.y + 74, 14, w - 64, 21, 4, C_MUTED);
+
+    /* case : tout supprimer, données comprises */
+    Rectangle box = {card.x + 32, card.y + 158, w - 64, 70};
+    rrect(box, 14, U.uninst_data ? with_alpha(C_ERR, 0.12f) : (Color){255, 255, 255, 8});
+    rrect_lines(box, 14, 1, U.uninst_data ? with_alpha(C_ERR, 0.6f) : C_BORDER);
+    text(F.semibold, "Supprimer aussi toutes mes données", box.x + 18, box.y + 14, 15, U.uninst_data ? (Color){255, 150, 156, 255} : C_TEXT);
+    text_fit(F.regular, "Compte, packs installés, mondes solo, mods perso, réglages : rien n'est gardé, c'est définitif.", box.x + 18,
+             box.y + 38, 12, box.width - 110, U.uninst_data ? (Color){255, 150, 156, 255} : C_DIM);
+    if (ui_toggle("uninst-data", (Rectangle){box.x + box.width - 70, box.y + 20, 52, 30}, U.uninst_data)) U.uninst_data = !U.uninst_data;
+
+    float by = card.y + h - 74;
+    LOCK();
+    int busy = S.task != TASK_IDLE || S.game_running;
+    UNLOCK();
+    if (ui_button("uninst-cancel", (Rectangle){card.x + w - 32 - 220 - 12 - 140, by, 140, 46}, "Annuler", NULL, BTN_GHOST, 1) ||
+        IsKeyPressed(KEY_ESCAPE))
+        U.uninst_open = 0;
+    if (ui_button("uninst-go", (Rectangle){card.x + w - 32 - 220, by, 220, 46}, U.uninst_data ? "Tout supprimer" : "Désinstaller",
+                  icon_trash_fn, BTN_DANGER, !busy)) {
+        if (uninstall_run(U.uninst_data) == 0) {
+            U.uninst_open = 0;
+            U.quit_req = 1; /* le launcher se ferme : ses fichiers sont partis (ou partent juste après) */
+        } else {
+            ui_toast(2, "Désinstallation impossible : %s", last_error());
+        }
+    }
+    if (busy) text(F.medium, "Ferme le jeu et attends la fin de la tâche en cours.", card.x + 32, by + 15, 12, (Color){255, 170, 110, 255});
 }
 
 /* ---------- joueurs en ligne ---------- */
@@ -3728,11 +3778,11 @@ static void draw_settings(const snapshot *s, float oy) {
             if (ui_button("set-install", (Rectangle){r.x + r.width - 28 - 250 - 12 - 150 - 12 - 160, r.y + 32, 160, 44}, "Installer",
                           icon_download, BTN_PRIMARY, 1))
                 do_install();
-        } else if (install_integrated()) {
-            if (ui_button("set-uninstall", (Rectangle){r.x + r.width - 28 - 250 - 12 - 150 - 12 - 200, r.y + 32, 200, 44},
-                          "Retirer du menu", icon_close, BTN_GHOST, 1)) {
-                install_remove();
-                ui_toast(0, "Retiré du menu des applications (tes données restent)");
+        } else if (uninstall_available()) {
+            if (ui_button("set-uninstall", (Rectangle){r.x + r.width - 28 - 250 - 12 - 150 - 12 - 170, r.y + 32, 170, 44},
+                          "Désinstaller", icon_trash_fn, BTN_DANGER, 1)) {
+                U.uninst_open = 1;
+                U.uninst_data = 0;
             }
         }
         if (ui_button("set-issue", (Rectangle){r.x + r.width - 28 - 250, r.y + 32, 250, 44}, "Signaler un problème", icon_issue_fn,
@@ -3974,6 +4024,7 @@ int main(void) {
     if (dev_page && strcmp(dev_page, "mods") == 0) U.page = PAGE_MODS;
     if (dev_page && strcmp(dev_page, "settings") == 0) U.page = PAGE_SETTINGS;
     if (dev_page && strcmp(dev_page, "install") == 0) U.inst_open = 1; /* captures : proposition d'installation */
+    if (dev_page && strcmp(dev_page, "uninstall") == 0) U.uninst_open = 1, U.page = PAGE_SETTINGS;
     if (getenv("STROKA_SCROLL")) U.settings_scroll = (float)atof(getenv("STROKA_SCROLL")); /* captures : Réglages défilés */
     if (dev_page && strcmp(dev_page, "login") == 0) {
         U.login_open = 1;
@@ -4056,7 +4107,7 @@ int main(void) {
         update_music(&s);
         update_accent();
         update_key_refresh();
-        ui_begin_frame(U.login_open || U.um_open || U.mig_open || U.sp_open || U.key_open || U.players_open || U.inst_open);
+        ui_begin_frame(U.login_open || U.um_open || U.mig_open || U.sp_open || U.key_open || U.players_open || U.inst_open || U.uninst_open);
         BeginDrawing();
         ClearBackground(C_BG);
         /* fond animé : thème du pack affiché (l'ancien pack tant que son fond n'est pas sorti) */
@@ -4085,6 +4136,8 @@ int main(void) {
         if (!U.login_open && (U.um_open || um_appear > 0.02f)) draw_user_mods_modal(um_appear);
         float mig_appear = ui_anim("mig-modal", U.mig_open ? 1.0f : 0.0f, 12);
         if (!U.login_open && (U.mig_open || mig_appear > 0.02f)) draw_import_modal(&s, mig_appear);
+        float un_appear = ui_anim("uninst-modal", U.uninst_open ? 1.0f : 0.0f, 12);
+        if (!U.login_open && (U.uninst_open || un_appear > 0.02f)) draw_uninstall_modal(un_appear);
         float in_appear = ui_anim("inst-modal", U.inst_open ? 1.0f : 0.0f, 12);
         if (!U.login_open && (U.inst_open || in_appear > 0.02f)) draw_install_modal(in_appear);
         float pl_appear = ui_anim("pl-modal", U.players_open ? 1.0f : 0.0f, 12);

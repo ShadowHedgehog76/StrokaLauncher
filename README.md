@@ -40,7 +40,10 @@ Sous Linux, les fenêtres de choix de fichier utilisent `zenity` (GNOME) ou `kdi
   **se déplacer dans Applications** ;
 - **Linux** : `StrokaLauncher-x86_64.AppImage` (Ubuntu 22.04+, Arch, SteamOS en mode bureau…) : au premier
   lancement, le launcher propose de **s'installer** (copie dans `~/.local/bin`, raccourci et icône dans le menu des
-  applications ; retrait dans Réglages → À propos) ; et une archive `.tar.gz`.
+  applications) ; et une archive `.tar.gz`.
+- Réglages → À propos → **Désinstaller** (tous les systèmes) : retire le launcher (menu, raccourcis, fichiers du
+  programme ; sous Windows avec son désinstallateur) en gardant les données, sauf si « Supprimer aussi toutes mes
+  données » est coché.
 
 Avant le premier build, ajoute dans **Settings → Secrets and variables → Actions** les secrets `SUPABASE_URL` et
 `SUPABASE_KEY` (clé publishable). Pour publier une version : `git tag v1.0.0 && git push origin v1.0.0` — une

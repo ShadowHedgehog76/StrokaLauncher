@@ -17,8 +17,13 @@ int install_run(void);
 /* Lance la copie installée */
 int install_restart(void);
 
-/* Linux : le launcher est-il dans le menu des applications ? Retrait (raccourci, icône, copie installée). */
+/* Linux : le launcher est-il dans le menu des applications ? */
 int install_integrated(void);
-int install_remove(void);
+
+/* Désinstallation : 1 si possible (app installée ou portable empaquetée, pas une compilation locale).
+ * uninstall_run retire le launcher (menu, raccourcis, fichiers du programme) ; avec delete_data, aussi toutes les
+ * données (compte, packs installés, mondes, mods perso). 0 si OK : il faut ensuite quitter le launcher. */
+int uninstall_available(void);
+int uninstall_run(int delete_data);
 
 #endif
