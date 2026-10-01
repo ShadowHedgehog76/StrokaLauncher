@@ -41,10 +41,16 @@ else
   CORE_LIBS := -lcurl -lz -lpthread
 endif
 
+# Version affichée par macOS (Info.plist) : « v1.2.3 » -> « 1.2.3 », compilation locale -> 0.0.0
+PLIST_VERSION := $(patsubst v%,%,$(LAUNCHER_VERSION))
+ifeq ($(filter-out dev,$(PLIST_VERSION)),)
+  PLIST_VERSION := 0.0.0
+endif
+
 LAUNCHER := StrokaLauncher$(EXE)
 CLI      := stroka-cli$(EXE)
 
-CORE_SRC := src/auth.c src/game.c src/http.c src/java.c src/localpacks.c src/migrate.c src/modmeta.c src/pack.c src/ping.c src/platform.c src/report.c src/scenes.c \
+CORE_SRC := src/auth.c src/game.c src/http.c src/installer.c src/java.c src/localpacks.c src/migrate.c src/modmeta.c src/pack.c src/ping.c src/platform.c src/report.c src/scenes.c \
             src/settings.c src/skin.c src/supabase.c src/sync.c src/updater.c src/usermods.c src/util.c src/versions.c src/zip.c
 CJSON    := third_party/cjson/cJSON.c
 GUI_SRC  := gui/app.c gui/brand.c gui/customscene.c gui/draw.c gui/scene.c gui/ui.c
@@ -133,9 +139,18 @@ app: $(LAUNCHER)
 	@rm -rf $(APP)
 	@mkdir -p $(APP)/Contents/MacOS $(APP)/Contents/Resources
 	cp $(LAUNCHER) $(APP)/Contents/MacOS/StrokaLauncher
-	cp packaging/Info.plist $(APP)/Contents/Info.plist
+	sed -e 's/<string>1.0.0<\/string>/<string>$(PLIST_VERSION)<\/string>/' packaging/Info.plist > $(APP)/Contents/Info.plist
 	cp packaging/macos/icon.icns $(APP)/Contents/Resources/icon.icns
 	@echo "Application créée : $(APP)"
+
+# Image disque macOS : l'app et un raccourci vers Applications (glisser-déposer)
+dmg: app
+	@rm -rf $(BUILD)/dmg dist/StrokaLauncher-macOS.dmg
+	@mkdir -p $(BUILD)/dmg dist
+	cp -R $(APP) $(BUILD)/dmg/
+	ln -s /Applications $(BUILD)/dmg/Applications
+	hdiutil create -volname "Stroka Launcher" -srcfolder $(BUILD)/dmg -ov -format UDZO dist/StrokaLauncher-macOS.dmg
+	@echo "Image disque créée : dist/StrokaLauncher-macOS.dmg"
 
 clean:
 	rm -rf $(BUILD) StrokaLauncher StrokaAdmin stroka-cli *.exe
@@ -143,4 +158,4 @@ clean:
 distclean: clean
 	$(MAKE) -C $(RAYLIB_DIR) clean
 
-.PHONY: all app icon clean distclean
+.PHONY: all app dmg icon clean distclean

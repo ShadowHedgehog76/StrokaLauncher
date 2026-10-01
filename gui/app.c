@@ -17,6 +17,7 @@
 #include "game.h"
 #include "customscene.h"
 #include "http.h"
+#include "installer.h"
 #include "localpacks.h"
 #include "migrate.h"
 #include "modmeta.h"
@@ -184,6 +185,8 @@ static struct {
     int key_pending, key_armed; /* actualisation à lancer / résultat attendu pour vérifier la clé */
     int bubble_solo;  /* bulle des packs : 0 en ligne, 1 solo */
     int players_open, players_pack; /* fenêtre des joueurs en ligne */
+    int inst_open, quit_req;        /* proposition d'installation ; demande de fermeture (app relancée ailleurs) */
+    char inst_target[64];
     float bubble_t;   /* instant de la dernière bascule */
     mig_list mig;
     float mig_scroll;
@@ -1825,7 +1828,7 @@ static void icon_back_fn(Vector2 c, float s, Color col) {
 static void page_header(const char *title, const char *subtitle, float oy) {
     float x = SIDEBAR_W + 56;
     float bw = nav_pill_width("Accueil");
-    int esc = IsKeyPressed(KEY_ESCAPE) && !U.login_open && !U.um_open && !U.mig_open && !U.key_open && !U.players_open;
+    int esc = IsKeyPressed(KEY_ESCAPE) && !U.login_open && !U.um_open && !U.mig_open && !U.key_open && !U.players_open && !U.inst_open;
     if (esc && ui_any_focus()) { /* Échap quitte d'abord le champ de texte */
         ui_unfocus();
         esc = 0;
@@ -2597,6 +2600,54 @@ static void icon_issue_fn(Vector2 c, float s, Color col) {
     DrawRing(c, r - s * 0.09f, r, 0, 360, 32, col);
     DrawRectangleRounded((Rectangle){c.x - s * 0.05f, c.y - r * 0.55f, s * 0.1f, r * 0.7f}, 1, 4, col);
     DrawCircleV((Vector2){c.x, c.y + r * 0.42f}, s * 0.06f, col);
+}
+
+/* ---------- installation (copie portable -> vraie app) ---------- */
+
+static void do_install(void) {
+    if (install_run() != 0) {
+        ui_toast(2, "Installation impossible : %s", last_error());
+        return;
+    }
+    U.inst_open = 0;
+#ifdef __APPLE__
+    if (install_restart() == 0) U.quit_req = 1; /* la copie de Applications prend le relais */
+#else
+    const char *ai = getenv("APPIMAGE");
+    if (install_restart() == 0 && ai && !strstr(ai, "/.local/bin/")) U.quit_req = 1;
+    else ui_toast(1, "Stroka Launcher est dans le menu des applications");
+#endif
+}
+
+static void draw_install_modal(float appear) {
+    DrawRectangle(0, 0, WIN_W, WIN_H, with_alpha((Color){4, 4, 10, 255}, 0.72f * appear));
+    float w = 620, h = 300;
+    Rectangle card = {(WIN_W - w) / 2, (WIN_H - h) / 2 + 12 + (1 - ui_ease_out(appear)) * 30, w, h};
+    glow(card, 26, with_alpha(C_ACCENT, 0.3f), 0, 40);
+    rrect(card, 26, (Color){20, 18, 32, 252});
+    rrect_lines(card, 26, 1, C_BORDER);
+    if (appear < 0.99f && !U.inst_open) return;
+    icon_cube((Vector2){card.x + 56, card.y + 58}, 48, C_ACCENT_HI, C_ACCENT, C_ACCENT2);
+    text(F.bold, "Installer Stroka Launcher", card.x + 100, card.y + 34, 24, C_TEXT);
+#ifdef __APPLE__
+    const char *msg = "Le launcher tourne depuis Téléchargements ou l'image disque. Installe-le dans Applications pour le "
+                      "retrouver dans le Launchpad et le Dock ; il continuera de se mettre à jour tout seul.";
+#else
+    const char *msg = "Ajoute Stroka Launcher au menu des applications, avec son icône (copie dans ~/.local/bin). "
+                      "Il continuera de se mettre à jour tout seul.";
+#endif
+    text_wrap(F.regular, msg, card.x + 32, card.y + 100, 14, w - 64, 21, 4, C_MUTED);
+    float by = card.y + h - 74;
+    if (ui_button("inst-never", (Rectangle){card.x + 32, by, 170, 46}, "Ne plus demander", NULL, BTN_GHOST, 1)) {
+        U.cfg.install_dismissed = 1;
+        settings_save(&U.cfg);
+        U.inst_open = 0;
+        ui_toast(0, "Tu pourras l'installer plus tard depuis Réglages → À propos");
+    }
+    if (ui_button("inst-later", (Rectangle){card.x + w - 32 - 180 - 12 - 140, by, 140, 46}, "Plus tard", NULL, BTN_GHOST, 1) ||
+        IsKeyPressed(KEY_ESCAPE))
+        U.inst_open = 0;
+    if (ui_button("inst-go", (Rectangle){card.x + w - 32 - 180, by, 180, 46}, "Installer", icon_download, BTN_PRIMARY, 1)) do_install();
 }
 
 /* ---------- joueurs en ligne ---------- */
@@ -3672,6 +3723,18 @@ static void draw_settings(const snapshot *s, float oy) {
         else snprintf(line, sizeof line, "Stroka Launcher %s", LAUNCHER_VERSION);
         r = section(926 + oy, 110, "À propos", "");
         text(F.medium, line, r.x + 28, r.y + 48, 13, st == 2 ? C_ACCENT : C_MUTED);
+        char target[64];
+        if (install_available(target, sizeof target)) {
+            if (ui_button("set-install", (Rectangle){r.x + r.width - 28 - 250 - 12 - 150 - 12 - 160, r.y + 32, 160, 44}, "Installer",
+                          icon_download, BTN_PRIMARY, 1))
+                do_install();
+        } else if (install_integrated()) {
+            if (ui_button("set-uninstall", (Rectangle){r.x + r.width - 28 - 250 - 12 - 150 - 12 - 200, r.y + 32, 200, 44},
+                          "Retirer du menu", icon_close, BTN_GHOST, 1)) {
+                install_remove();
+                ui_toast(0, "Retiré du menu des applications (tes données restent)");
+            }
+        }
         if (ui_button("set-issue", (Rectangle){r.x + r.width - 28 - 250, r.y + 32, 250, 44}, "Signaler un problème", icon_issue_fn,
                       BTN_GHOST, 1))
             sys_open("https://github.com/" UPDATE_REPO "/issues/new");
@@ -3877,6 +3940,9 @@ int main(void) {
     data_dir();
     settings_load(&U.cfg);
     packs_set_access_keys(U.cfg.access_keys);
+    /* copie portable (Téléchargements, image disque, AppImage) : proposer l'installation */
+    if (!U.cfg.install_dismissed && !getenv("STROKA_SCREENSHOT") && install_available(U.inst_target, sizeof U.inst_target))
+        U.inst_open = 1;
     U.sys_ram = system_ram_mb();
     U.sel = -1;
     U.switch_t = 1e9f; /* aucune transition au démarrage */
@@ -3907,6 +3973,7 @@ int main(void) {
     const char *dev_shot = getenv("STROKA_SCREENSHOT");
     if (dev_page && strcmp(dev_page, "mods") == 0) U.page = PAGE_MODS;
     if (dev_page && strcmp(dev_page, "settings") == 0) U.page = PAGE_SETTINGS;
+    if (dev_page && strcmp(dev_page, "install") == 0) U.inst_open = 1; /* captures : proposition d'installation */
     if (getenv("STROKA_SCROLL")) U.settings_scroll = (float)atof(getenv("STROKA_SCROLL")); /* captures : Réglages défilés */
     if (dev_page && strcmp(dev_page, "login") == 0) {
         U.login_open = 1;
@@ -3989,7 +4056,7 @@ int main(void) {
         update_music(&s);
         update_accent();
         update_key_refresh();
-        ui_begin_frame(U.login_open || U.um_open || U.mig_open || U.sp_open || U.key_open || U.players_open);
+        ui_begin_frame(U.login_open || U.um_open || U.mig_open || U.sp_open || U.key_open || U.players_open || U.inst_open);
         BeginDrawing();
         ClearBackground(C_BG);
         /* fond animé : thème du pack affiché (l'ancien pack tant que son fond n'est pas sorti) */
@@ -4009,6 +4076,7 @@ int main(void) {
         draw_sidebar();
         quit = ui_titlebar(WIN_W, TITLE_H, SIDEBAR_W, "STROKA", "LAUNCHER");
         if (draw_update_button(&s)) quit = 1; /* nouvelle version lancée : on laisse la place */
+        if (U.quit_req) quit = 1;              /* copie installée lancée : on laisse la place */
 
         ui_layer = 1;
         float appear = ui_anim("modal", U.login_open ? 1.0f : 0.0f, 12);
@@ -4017,6 +4085,8 @@ int main(void) {
         if (!U.login_open && (U.um_open || um_appear > 0.02f)) draw_user_mods_modal(um_appear);
         float mig_appear = ui_anim("mig-modal", U.mig_open ? 1.0f : 0.0f, 12);
         if (!U.login_open && (U.mig_open || mig_appear > 0.02f)) draw_import_modal(&s, mig_appear);
+        float in_appear = ui_anim("inst-modal", U.inst_open ? 1.0f : 0.0f, 12);
+        if (!U.login_open && (U.inst_open || in_appear > 0.02f)) draw_install_modal(in_appear);
         float pl_appear = ui_anim("pl-modal", U.players_open ? 1.0f : 0.0f, 12);
         if (!U.login_open && (U.players_open || pl_appear > 0.02f)) draw_players_modal(&s, pl_appear);
         float key_appear = ui_anim("key-modal", U.key_open ? 1.0f : 0.0f, 12);

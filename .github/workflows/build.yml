@@ -52,6 +52,14 @@ jobs:
           mkdir -p dist
           ditto -c -k --keepParent build/StrokaLauncher.app dist/StrokaLauncher-macOS.zip
 
+      - name: Image disque (.dmg)
+        run: |
+          # l'app et un raccourci vers Applications : on glisse l'une sur l'autre
+          rm -rf build/dmg && mkdir -p build/dmg
+          cp -R build/StrokaLauncher.app build/dmg/
+          ln -s /Applications build/dmg/Applications
+          hdiutil create -volname "Stroka Launcher" -srcfolder build/dmg -ov -format UDZO dist/StrokaLauncher-macOS.dmg
+
       - uses: actions/upload-artifact@v4
         with:
           name: macos
@@ -133,10 +141,21 @@ jobs:
           done | sort -u | xargs -I{} cp -n {} "dist/Stroka Launcher/"
           cd dist && zip -r StrokaLauncher-Windows-x64.zip "Stroka Launcher"
 
+      - name: Installateur (Setup.exe)
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          $v = if ($env:LAUNCHER_VERSION -eq "dev") { "0.0.0" } else { $env:LAUNCHER_VERSION.TrimStart("v") }
+          & $iscc "/DAppVersion=$v" "packaging\windows\installer.iss"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            dist/*.exe
 
   release:
     name: Release GitHub

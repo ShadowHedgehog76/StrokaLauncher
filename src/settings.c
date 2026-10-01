@@ -16,6 +16,7 @@ void settings_load(settings *s) {
     s->install_music = 1;
     s->selected_pack[0] = '\0';
     s->access_keys[0] = '\0';
+    s->install_dismissed = 0;
 
     char *p = path_join(data_dir(), "config.json");
     char *data = read_file(p, NULL);
@@ -28,6 +29,8 @@ void settings_load(settings *s) {
     if (cJSON_IsBool(v)) s->minimize_on_launch = cJSON_IsTrue(v);
     v = cJSON_GetObjectItem(j, "join_server");
     if (cJSON_IsBool(v)) s->join_server = cJSON_IsTrue(v);
+    v = cJSON_GetObjectItem(j, "install_dismissed");
+    if (cJSON_IsBool(v)) s->install_dismissed = cJSON_IsTrue(v);
     v = cJSON_GetObjectItem(j, "install_music");
     if (cJSON_IsBool(v)) s->install_music = cJSON_IsTrue(v);
     const char *sel = cJSON_GetStringValue(cJSON_GetObjectItem(j, "selected_pack"));
@@ -48,6 +51,7 @@ void settings_save(const settings *s) {
     cJSON_AddBoolToObject(j, "minimize_on_launch", s->minimize_on_launch);
     cJSON_AddBoolToObject(j, "join_server", s->join_server);
     cJSON_AddBoolToObject(j, "install_music", s->install_music);
+    cJSON_AddBoolToObject(j, "install_dismissed", s->install_dismissed);
     cJSON_AddStringToObject(j, "selected_pack", s->selected_pack);
     cJSON *keys = cJSON_AddArrayToObject(j, "access_keys");
     char buf[sizeof s->access_keys];

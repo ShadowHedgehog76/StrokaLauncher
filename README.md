@@ -30,11 +30,17 @@ Sous Linux, les fenêtres de choix de fichier utilisent `zenity` (GNOME) ou `kdi
 
 `.github/workflows/build.yml` compile à chaque push :
 
-- **macOS** : `StrokaLauncher-macOS.zip` (application universelle Apple Silicon + Intel, non signée : au
-  premier lancement, clic droit → **Ouvrir**) ;
-- **Linux** : `StrokaLauncher-x86_64.AppImage` (Ubuntu 22.04+, Arch, SteamOS en mode bureau…) et une
-  archive `.tar.gz` ;
-- **Windows** : `StrokaLauncher-Windows-x64.zip` (exécutable et DLL).
+- **Windows** : `StrokaLauncher-Setup-Windows-x64.exe`, **installateur** (Inno Setup, en français) : installation
+  pour l'utilisateur (sans droits administrateur) dans `%LOCALAPPDATA%\Programs\Stroka Launcher`, menu Démarrer,
+  raccourci Bureau au choix, désinstallation depuis « Applications et fonctionnalités » (les données peuvent être
+  gardées) ; et `StrokaLauncher-Windows-x64.zip` (version portable, utilisée par la mise à jour automatique) ;
+- **macOS** : `StrokaLauncher-macOS.dmg`, **image disque** (glisser l'app sur Applications), application universelle
+  Apple Silicon + Intel, non signée : au premier lancement, clic droit → **Ouvrir** ; `StrokaLauncher-macOS.zip`
+  sert à la mise à jour automatique. Lancé depuis Téléchargements ou depuis l'image disque, le launcher propose de
+  **se déplacer dans Applications** ;
+- **Linux** : `StrokaLauncher-x86_64.AppImage` (Ubuntu 22.04+, Arch, SteamOS en mode bureau…) : au premier
+  lancement, le launcher propose de **s'installer** (copie dans `~/.local/bin`, raccourci et icône dans le menu des
+  applications ; retrait dans Réglages → À propos) ; et une archive `.tar.gz`.
 
 Avant le premier build, ajoute dans **Settings → Secrets and variables → Actions** les secrets `SUPABASE_URL` et
 `SUPABASE_KEY` (clé publishable). Pour publier une version : `git tag v1.0.0 && git push origin v1.0.0` — une
@@ -131,7 +137,7 @@ jamais la clé `service_role` / `sb_secret_…`). Le schéma de la base est dans
 (+ `STROKA_SHOT_FRAME`), `STROKA_SCRIPT="60:x,y;90:x,y"` (clics simulés pour les tests d'interface) et
 `STROKA_JVM_ARGS` (arguments Java supplémentaires au lancement du jeu), `STROKA_UPDATE_API` (autre source
 pour la vérification des mises à jour, ex : `file:///…/latest.json`), `STROKA_UM_SEARCH=…` (recherche
-pré-remplie dans « Mes mods », pour les captures), `STROKA_PAGE=import|solo|soloedit|soloedit-mods|key|players|mymods` (fenêtres et pages ouvertes pour les captures), `STROKA_SCROLL=…` (Réglages défilés).
+pré-remplie dans « Mes mods », pour les captures), `STROKA_PAGE=import|solo|soloedit|soloedit-mods|key|players|mymods|install` (fenêtres et pages ouvertes pour les captures), `STROKA_SCROLL=…` (Réglages défilés).
 
 
 ## Code
@@ -143,7 +149,7 @@ pré-remplie dans « Mes mods », pour les captures), `STROKA_PAGE=import|solo|s
 | `gui/ui.c`, `gui/draw.c`, `gui/scene.c` | boîte à outils d'interface partagée, dessin, fond animé |
 | `src/game.c` | installation vanilla + loaders, arguments, lancement |
 | `src/pack.c`, `src/sync.c` | modèle de pack, synchronisation des fichiers, `servers.dat` |
-| `src/updater.c` | mise à jour automatique du launcher (releases GitHub) |
+| `src/updater.c`, `src/installer.c` | mise à jour automatique (releases GitHub) ; installation depuis une copie portable |
 | `src/platform.c`, `src/zip.c` | code propre à chaque système (processus, fenêtres de choix, dossiers), lecture des .jar |
 | `gui/customscene.c`, `src/scenes.c` | fonds de l'éditeur : format, dessin des blocs et éléments, téléchargement |
 | `src/localpacks.c`, `src/versions.c` | packs solo ; versions de Minecraft et des loaders |
