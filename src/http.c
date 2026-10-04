@@ -12,7 +12,7 @@
 
 #define USER_AGENT "StrokaLauncher/1.0"
 #define PARALLEL 16
-#define MAX_TRIES 3
+#define MAX_TRIES 6
 
 void http_global_init(void) { curl_global_init(CURL_GLOBAL_DEFAULT); }
 void http_global_cleanup(void) { curl_global_cleanup(); }
@@ -201,7 +201,19 @@ typedef struct {
     sha1_ctx sha;
     int tries;
     int insecure; /* certificat refusé (HTTPS intercepté) : retéléchargé sans vérification, empreinte SHA1 contrôlée */
+    int http1;    /* connexion coupée : nouvel essai en HTTP/1.1 (certains antivirus / box gèrent mal HTTP/2) */
+    long long not_before; /* nouvel essai pas avant cet instant (mono_ms), pour laisser le réseau souffler */
 } xfer;
+
+/* Téléchargements simultanés : réduits quand les connexions sont coupées (réseau saturé, antivirus, box…) */
+static int g_parallel = PARALLEL;
+
+/* Erreur de connexion passagère (coupure, délai dépassé…) plutôt qu'un fichier introuvable */
+static int network_error(CURLcode res) {
+    return res == CURLE_RECV_ERROR || res == CURLE_SEND_ERROR || res == CURLE_OPERATION_TIMEDOUT || res == CURLE_COULDNT_CONNECT ||
+           res == CURLE_PARTIAL_FILE || res == CURLE_GOT_NOTHING || res == CURLE_HTTP2 || res == CURLE_HTTP2_STREAM ||
+           res == CURLE_SSL_CONNECT_ERROR || res == CURLE_COULDNT_RESOLVE_HOST;
+}
 
 /* ---------- HTTPS intercepté (antivirus, filtre, proxy) ---------- */
 
@@ -293,6 +305,10 @@ static int start_xfer(CURLM *m, xfer *x) {
     curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, file_write);
     curl_easy_setopt(h, CURLOPT_WRITEDATA, x);
     curl_easy_setopt(h, CURLOPT_PRIVATE, x);
+    if (x->http1) {
+        curl_easy_setopt(h, CURLOPT_HTTP_VERSION, (long)CURL_HTTP_VERSION_1_1);
+        curl_easy_setopt(h, CURLOPT_FORBID_REUSE, 1L); /* connexion neuve : l'ancienne a peut-être été coupée */
+    }
     if (x->insecure) {
         /* le contenu reste vérifié : son empreinte SHA1 vient d'une source sûre (pack Supabase, manifeste Mojang…) */
         curl_easy_setopt(h, CURLOPT_SSL_VERIFYPEER, 0L);
@@ -325,7 +341,15 @@ static int finish_xfer(xfer *x, CURLcode res) {
         x->insecure = 1;
         return 0;
     }
-    if (++x->tries < MAX_TRIES) return 0;
+    if (++x->tries < MAX_TRIES) {
+        if (network_error(res)) {
+            /* coupure : moins de téléchargements à la fois, HTTP/1.1, et une pause qui s'allonge (1 s, 2 s, 4 s…) */
+            x->http1 = 1;
+            if (g_parallel > 2) g_parallel /= 2;
+            x->not_before = mono_ms() + 1000LL * (1LL << (x->tries - 1));
+        }
+        return 0;
+    }
     /* raison d'abord : le message est souvent coupé à l'écran ; puis le fichier, puis l'adresse complète */
     const char *url = x->it->url, *name = strrchr(url, '/');
     char why[256];
@@ -351,19 +375,28 @@ int dl_run(dl_list *l, const char *label) {
         return 0;
     }
 
-    /* File d'attente : chaque élément peut y revenir en cas de réessai */
-    size_t qcap = total * MAX_TRIES + 1, qhead = 0, qtail = 0;
-    size_t *queue = malloc(qcap * sizeof(size_t));
-    for (size_t i = 0; i < total; i++) queue[qtail++] = i;
+    /* File d'attente circulaire : un élément y est au plus une fois (il y revient en cas de réessai) */
+    size_t qhead = 0, qcount = total;
+    size_t *queue = malloc(total * sizeof(size_t));
+    for (size_t i = 0; i < total; i++) queue[i] = i;
+    g_parallel = PARALLEL;
 
     CURLM *m = curl_multi_init();
     size_t done = 0;
     int active = 0, failed = 0;
     report_progress(label, 0, total);
 
-    while (!failed && (qhead < qtail || active > 0)) {
-        while (active < PARALLEL && qhead < qtail) {
-            xfer *x = &xs[queue[qhead++]];
+    while (!failed && (qcount > 0 || active > 0)) {
+        long long now = mono_ms();
+        for (size_t scan = qcount; active < g_parallel && scan > 0; scan--) {
+            size_t i = queue[qhead];
+            qhead = (qhead + 1) % total;
+            qcount--;
+            xfer *x = &xs[i];
+            if (x->not_before > now) { /* en pause avant son prochain essai : remis en fin de file */
+                queue[(qhead + qcount++) % total] = i;
+                continue;
+            }
             if (start_xfer(m, x) != 0) {
                 set_error("impossible d'écrire %s", x->it->path);
                 failed = 1;
@@ -399,7 +432,7 @@ int dl_run(dl_list *l, const char *label) {
                 done++;
                 report_progress(label, done, total);
             } else if (r == 0) {
-                queue[qtail++] = (size_t)(x - xs);
+                queue[(qhead + qcount++) % total] = (size_t)(x - xs);
             } else {
                 failed = 1;
             }
