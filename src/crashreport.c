@@ -121,6 +121,8 @@ char *crashreport_build(const game_session *s, const char *player, const char *t
     char *latest = path_join(s->instance, "logs/latest.log");
     if (file_exists(latest) && mtime_of(latest) >= s->started - 2) add_file(&b, "latest.log", latest);
     else if (file_exists(s->output)) add_file(&b, "Sortie du jeu", s->output);
+    else if (file_exists(latest)) add_file(&b, "latest.log (partie précédente ?)", latest);
+    else sb_add(&b, "\n(aucun log trouvé)\n");
     free(latest);
 
     replace_all(&b, token, "<jeton masqué>");
@@ -283,12 +285,14 @@ int crashreport_send(const game_session *s, const char *player, const char *summ
     char fname[128];
     snprintf(fname, sizeof fname, "stroka-%s-%lld.log", s->pack_slug[0] ? s->pack_slug : "pack", (long long)time(NULL));
     http_resp r;
-    int rc = http_post_file(DISCORD_WEBHOOK, payload, fname, report, strlen(report), &r);
+    /* wait=true : Discord répond avec le message créé (ou l'erreur) */
+    int rc = http_post_file(DISCORD_WEBHOOK "?wait=true", payload, fname, report, strlen(report), &r);
     free(payload);
     if (rc == 0 && (r.status < 200 || r.status >= 300)) {
-        set_error("Discord a refusé l'envoi (HTTP %ld)", r.status);
+        set_error("Discord a refusé l'envoi (HTTP %ld) %.200s", r.status, r.body ? r.body : "");
         rc = -1;
     }
+    if (getenv("STROKA_DEBUG_WEBHOOK") && r.body) fprintf(stderr, "%s\n", r.body);
     http_resp_free(&r);
     return rc;
 }
