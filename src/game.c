@@ -28,6 +28,62 @@
 
 char *game_shared_dir(void) { return path_join(data_dir(), "minecraft"); }
 
+/* ---------- dernière partie ---------- */
+
+#include <dirent.h>
+#include <pthread.h>
+#include <sys/stat.h>
+#include <time.h>
+
+static game_session g_sess;
+static pthread_mutex_t g_sess_mu = PTHREAD_MUTEX_INITIALIZER;
+
+void game_session_get(game_session *out) {
+    pthread_mutex_lock(&g_sess_mu);
+    *out = g_sess;
+    pthread_mutex_unlock(&g_sess_mu);
+}
+
+int game_session_crashed(const game_session *s) { return s->finished && (s->exit_code != 0 || s->crash[0]); }
+
+/* Rapport de plantage le plus récent écrit depuis since : un .txt de crash-reports, sinon un hs_err_pid (plantage de Java) */
+static void find_crash(const char *inst, long long since, char *out, size_t n) {
+    out[0] = '\0';
+    long long best = 0;
+    const char *dirs[2] = {"crash-reports", "."};
+    for (int k = 0; k < 2; k++) {
+        char *dir = path_join(inst, dirs[k]);
+        DIR *d = opendir(dir);
+        struct dirent *e;
+        while (d && (e = readdir(d))) {
+            int ok = k == 0 ? strstr(e->d_name, ".txt") != NULL : strncmp(e->d_name, "hs_err_pid", 10) == 0;
+            if (!ok) continue;
+            char *p = path_join(dir, e->d_name);
+            struct stat st;
+            if (stat(p, &st) == 0 && (long long)st.st_mtime >= since && (long long)st.st_mtime > best) {
+                best = st.st_mtime;
+                snprintf(out, n, "%s", p);
+            }
+            free(p);
+        }
+        if (d) closedir(d);
+        free(dir);
+    }
+}
+
+static int count_jars(const char *dir) {
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+    int n = 0;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        size_t l = strlen(e->d_name);
+        if (l > 4 && strcasecmp(e->d_name + l - 4, ".jar") == 0) n++;
+    }
+    closedir(d);
+    return n;
+}
+
 static cJSON *load_json(const char *path) {
     char *data = read_file(path, NULL);
     if (!data) return NULL;
@@ -615,8 +671,37 @@ int game_launch(const account *acc, const pack *p, const launch_opts *opts) {
     char loader[96];
     pack_loader_label(p, loader, sizeof loader);
     report_status("Lancement de %s (%s, Minecraft %s)…", p->name, loader, mc);
+    /* la sortie du jeu va dans un fichier, suivi en direct par le launcher (panneau des logs) */
+    char *out_log = xasprintf("%s/.stroka/game-output.log", inst);
+    pthread_mutex_lock(&g_sess_mu);
+    memset(&g_sess, 0, sizeof g_sess);
+    g_sess.running = 1;
+    g_sess.started = (long long)time(NULL);
+    snprintf(g_sess.instance, sizeof g_sess.instance, "%s", inst);
+    snprintf(g_sess.output, sizeof g_sess.output, "%s", out_log);
+    snprintf(g_sess.pack_name, sizeof g_sess.pack_name, "%s", p->name);
+    snprintf(g_sess.pack_slug, sizeof g_sess.pack_slug, "%s", p->slug);
+    snprintf(g_sess.mc, sizeof g_sess.mc, "%s", mc);
+    snprintf(g_sess.loader, sizeof g_sess.loader, "%s", loader);
+    snprintf(g_sess.java, sizeof g_sess.java, "%s", java ? java : "");
+    g_sess.pack_revision = p->revision;
+    g_sess.ram_mb = opts->ram_mb;
+    g_sess.local = p->local;
+    char *mods_dir = path_join(inst, "mods");
+    g_sess.mods = count_jars(mods_dir);
+    free(mods_dir);
+    long long started = g_sess.started;
+    pthread_mutex_unlock(&g_sess_mu);
+
     report_game_state(1);
-    int code = run_process(argv.v, inst);
+    int code = run_process_log(argv.v, inst, out_log);
+    free(out_log);
+    pthread_mutex_lock(&g_sess_mu);
+    g_sess.running = 0;
+    g_sess.finished = 1;
+    g_sess.exit_code = code;
+    find_crash(inst, started - 2, g_sess.crash, sizeof g_sess.crash);
+    pthread_mutex_unlock(&g_sess_mu);
     report_game_state(0);
     report_status("Le jeu s'est fermé (code %d).", code);
     rc = 0;

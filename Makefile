@@ -7,7 +7,7 @@ BUILD   ?= build
 
 # Identifiants Supabase (URL + clé publique), lus depuis supabase.env
 -include supabase.env
-SB_DEFS := -DSUPABASE_URL='"$(SUPABASE_URL)"' -DSUPABASE_KEY='"$(SUPABASE_KEY)"'
+SB_DEFS := -DSUPABASE_URL='"$(SUPABASE_URL)"' -DSUPABASE_KEY='"$(SUPABASE_KEY)"' -DDISCORD_WEBHOOK='"$(DISCORD_WEBHOOK)"'
 
 # Version du launcher (ex : make LAUNCHER_VERSION=1.0.1) ; sans elle : « dev », sans mise à jour automatique
 ifneq ($(LAUNCHER_VERSION),)
@@ -50,7 +50,7 @@ endif
 LAUNCHER := StrokaLauncher$(EXE)
 CLI      := stroka-cli$(EXE)
 
-CORE_SRC := src/auth.c src/game.c src/http.c src/installer.c src/java.c src/localpacks.c src/migrate.c src/modmeta.c src/pack.c src/ping.c src/platform.c src/report.c src/scenes.c \
+CORE_SRC := src/auth.c src/crashreport.c src/game.c src/http.c src/installer.c src/java.c src/localpacks.c src/migrate.c src/modmeta.c src/pack.c src/ping.c src/platform.c src/report.c src/scenes.c \
             src/settings.c src/skin.c src/supabase.c src/sync.c src/updater.c src/usermods.c src/util.c src/versions.c src/zip.c
 CJSON    := third_party/cjson/cJSON.c
 GUI_SRC  := gui/app.c gui/brand.c gui/customscene.c gui/draw.c gui/scene.c gui/ui.c

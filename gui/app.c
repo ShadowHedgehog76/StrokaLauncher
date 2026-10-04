@@ -14,6 +14,7 @@
 #include "auth.h"
 #include "brand.h"
 #include "config.h"
+#include "crashreport.h"
 #include "game.h"
 #include "customscene.h"
 #include "http.h"
@@ -1471,6 +1472,7 @@ typedef struct {
 
 typedef void (*card_icon)(Vector2 c);
 static float card_alpha = 1; /* opacité des cartes (transition entre packs) */
+static float log_k;          /* panneau des logs affiché (0 → 1) : cartes et titre resserrés pour lui laisser la place */
 static void card_icon_mods(Vector2 c) {
     icon_cube(c, 24, with_alpha(C_ACCENT_HI, card_alpha), with_alpha(C_ACCENT, card_alpha), with_alpha(C_ACCENT2, card_alpha));
 }
@@ -1501,11 +1503,12 @@ static int draw_stat_card(const char *id, Rectangle r, card_icon icon, const cha
     float a = card_alpha;
     rrect(d, 18, with_alpha(mix((Color){16, 14, 26, 210}, (Color){26, 22, 40, 230}, h), a));
     rrect_lines(d, 18, 1, with_alpha(mix(C_BORDER, with_alpha(C_ACCENT, 0.5f), h), a));
-    Rectangle ib = {d.x + 18, d.y + 20, 48, 48};
-    rrect(ib, 14, with_alpha(C_ACCENT, 0.14f * a));
-    icon((Vector2){ib.x + 24, ib.y + 24});
-    text(F.medium, label, d.x + 80, d.y + 22, 13, with_alpha(C_MUTED, a));
-    text_fit(F.bold, value, d.x + 80, d.y + 40, 22, d.width - 96, with_alpha(vc, a));
+    float ibs = 48 - 10 * log_k, tx = 80 - 16 * log_k; /* carte resserrée : icône plus petite */
+    Rectangle ib = {d.x + 18 - 4 * log_k, d.y + (d.height - ibs) / 2, ibs, ibs};
+    rrect(ib, 14 - 3 * log_k, with_alpha(C_ACCENT, 0.14f * a));
+    icon((Vector2){ib.x + ibs / 2, ib.y + ibs / 2});
+    text_fit(F.medium, label, d.x + tx, d.y + 22, 13, d.width - tx - 12, with_alpha(C_MUTED, a));
+    text_fit(F.bold, value, d.x + tx, d.y + 40, 22, d.width - tx - 14, with_alpha(vc, a));
     if (!clickable) return 0;
     if (ui_clicked(r) && target != PAGE_HOME) set_page(target);
     return ui_clicked(r);
@@ -1552,7 +1555,8 @@ static void draw_pack_view(int idx, float oy, int interactive, const float dy[EL
     /* Titre (le « logo » du pack) : taille adaptée à la longueur du nom */
     if (al[EL_TITLE] > 0.001f) {
         float size = 104, a = al[EL_TITLE], ty0 = y + dy[EL_TITLE];
-        while (size > 44 && measure_sp(F.black, p->name, size, size * 0.05f).x > 720) size -= 4;
+        float max_w = 720 - 150 * log_k; /* logs affichés : le titre laisse la place au panneau */
+        while (size > 40 && measure_sp(F.black, p->name, size, size * 0.05f).x > max_w) size -= 4;
         float ty = ty0 + 40 + (104 - size) * 0.6f;
         text_sp(F.black, p->name, x + 2, ty + 6, size, size * 0.05f, with_alpha(BLACK, 0.45f * a));
         text_sp(F.black, p->name, x, ty, size, size * 0.05f, with_alpha(C_TEXT, a));
@@ -1563,7 +1567,7 @@ static void draw_pack_view(int idx, float oy, int interactive, const float dy[EL
         snprintf(solo, sizeof solo, "Pack solo %s %s. Ajoute tes mods dans « Mods », puis clique sur Jouer.", loader_display(p->loader),
                  p->mc_version);
         const char *desc = p->description[0] ? p->description : p->local ? solo : "Clique sur Jouer : tout s'installe automatiquement.";
-        text_wrap(F.regular, desc, x, y + 40 + 124 + 26 + dy[EL_DESC], 16, 640, 24, 3,
+        text_wrap(F.regular, desc, x, y + 40 + 124 + 26 + dy[EL_DESC], 16, 640 - 90 * log_k, 24, 3,
                   with_alpha((Color){200, 202, 220, 255}, al[EL_DESC]));
     }
 
@@ -1588,12 +1592,17 @@ static void draw_pack_view(int idx, float oy, int interactive, const float dy[EL
         }
         float cy = WIN_H - 244 + oy + dy[EL_CARDS];
         card_alpha = al[EL_CARDS];
-        draw_stat_card("card-mods", (Rectangle){x, cy, 214, 88}, card_icon_mods, "Mods", mods, C_TEXT, PAGE_MODS, 1);
-        draw_stat_card("card-ram", (Rectangle){x + 230, cy, 214, 88}, card_icon_ram, "Mémoire allouée", ram, C_TEXT, PAGE_SETTINGS, 1);
-        Rectangle srv_r = {x + 460, cy, 214, 88};
+        float cw = 214 - 32 * log_k, gap = 16 - 6 * log_k; /* resserrées quand le panneau des logs est ouvert */
+        draw_stat_card("card-mods", (Rectangle){x, cy, cw, 88}, card_icon_mods, "Mods", mods, C_TEXT, PAGE_MODS, 1);
+        draw_stat_card("card-ram", (Rectangle){x + cw + gap, cy, cw, 88}, card_icon_ram, log_k > 0.5f ? "Mémoire" : "Mémoire allouée", ram,
+                       C_TEXT, PAGE_SETTINGS, 1);
+        Rectangle srv_r = {x + 2 * (cw + gap), cy, cw, 88};
         int online = p->server_address[0] && get_ping(p->slug, &st) && st.online;
         /* serveur en ligne : la carte ouvre la liste des joueurs (le libellé l'annonce au survol) */
-        const char *srv_label = !p->server_address[0] ? "Serveur" : online && ui_mouse_in(srv_r) ? "Voir les joueurs" : "Joueurs en ligne";
+        const char *srv_label = !p->server_address[0] ? "Serveur"
+                                : online && ui_mouse_in(srv_r) ? "Voir les joueurs"
+                                : log_k > 0.5f                 ? "Joueurs"
+                                                               : "Joueurs en ligne";
         if (draw_stat_card("card-srv", srv_r, card_icon_server, srv_label, srv, sc, PAGE_HOME, online)) open_players(idx);
         card_alpha = 1;
     }
@@ -1756,6 +1765,301 @@ static void draw_home_bar(const snapshot *s, int idx, float dy, float alpha, int
     EndBlendMode();
 }
 
+/* ---------- logs du jeu (panneau de droite) et fenêtre de plantage ---------- */
+
+#define LOG_LINES 2000
+#define LOG_COLS 300
+static struct {
+    char path[1024];
+    long long off;
+    char lines[LOG_LINES][LOG_COLS];
+    unsigned char lvl[LOG_LINES]; /* 0 info, 1 avertissement, 2 erreur */
+    int head, n;                  /* tampon circulaire : ligne i à (head + i) % LOG_LINES */
+    char part[LOG_COLS];          /* ligne en cours (pas encore terminée par un retour à la ligne) */
+    int plen, in_trace;
+    float scroll;
+    int follow;
+    double last_poll;
+} LG;
+
+static void log_reset(const char *path) {
+    snprintf(LG.path, sizeof LG.path, "%s", path);
+    LG.off = 0;
+    LG.head = LG.n = LG.plen = LG.in_trace = 0;
+    LG.scroll = 0;
+    LG.follow = 1;
+}
+
+static void log_push(void) {
+    char *l = LG.part;
+    l[LG.plen] = '\0';
+    LG.plen = 0;
+    int lvl = 0;
+    int trace = (l[0] == '\t' || l[0] == ' ') && (strstr(l, "at ") || strstr(l, "..."));
+    if (strstr(l, "/ERROR]") || strstr(l, "/FATAL]") || strstr(l, "[ERROR]") || strstr(l, "Exception") ||
+        strncmp(l, "Caused by", 9) == 0 || (trace && LG.in_trace))
+        lvl = 2;
+    else if (strstr(l, "/WARN]") || strstr(l, "[WARN]")) lvl = 1;
+    LG.in_trace = lvl == 2;
+    for (char *c = l; *c; c++)
+        if (*c == '\t') *c = ' ';
+    int i = LG.n < LOG_LINES ? LG.n++ : (LG.head = (LG.head + 1) % LOG_LINES, LOG_LINES - 1);
+    int slot = (LG.head + i) % LOG_LINES;
+    memcpy(LG.lines[slot], l, LOG_COLS);
+    LG.lvl[slot] = (unsigned char)lvl;
+}
+
+/* Lit ce qui a été ajouté au fichier de sortie du jeu depuis la dernière fois */
+static void log_poll(const char *path) {
+    if (strcmp(path, LG.path) != 0) log_reset(path);
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    fseek(f, 0, SEEK_END);
+    long long size = ftell(f);
+    if (size < LG.off) log_reset(path); /* fichier recréé (nouvelle partie) */
+    if (size - LG.off > (2 << 20)) LG.off = size - (2 << 20); /* très en retard : seulement la fin */
+    fseek(f, (long)LG.off, SEEK_SET);
+    static char buf[64 << 10];
+    size_t got;
+    int rounds = 0;
+    while (rounds++ < 32 && (got = fread(buf, 1, sizeof buf, f)) > 0) {
+        LG.off += (long long)got;
+        for (size_t i = 0; i < got; i++) {
+            char c = buf[i];
+            if (c == '\n') log_push();
+            else if (c != '\r' && LG.plen < LOG_COLS - 1) LG.part[LG.plen++] = c;
+        }
+    }
+    fclose(f);
+}
+
+static void icon_send_fn(Vector2 c, float s, Color col) {
+    float k = s * 0.42f;
+    Vector2 a = {c.x - k, c.y - k * 0.15f}, b = {c.x + k, c.y - k * 0.8f}, d = {c.x - k * 0.2f, c.y + k * 0.85f};
+    DrawLineEx(a, b, 2, col);
+    DrawLineEx(b, d, 2, col);
+    DrawLineEx(d, (Vector2){c.x - k * 0.25f, c.y + k * 0.05f}, 2, col);
+    DrawLineEx((Vector2){c.x - k * 0.25f, c.y + k * 0.05f}, a, 2, col);
+    DrawLineEx((Vector2){c.x - k * 0.25f, c.y + k * 0.05f}, b, 1.6f, col);
+}
+
+/* Rapport complet de la partie (logs, versions…), jeton masqué ; à libérer */
+static char *build_report(const game_session *gs) {
+    return crashreport_build(gs, g_acc.name, g_acc.access_token);
+}
+
+static void copy_report(const game_session *gs) {
+    char *r = build_report(gs);
+    SetClipboardText(r);
+    free(r);
+    ui_toast(0, "Logs copiés dans le presse-papiers");
+}
+
+static void open_logs_dir(const game_session *gs) {
+    char *dir = path_join(gs->instance, "logs");
+    if (!file_exists(dir)) {
+        free(dir);
+        dir = xstrdup(gs->instance);
+    }
+    open_path(dir);
+    free(dir);
+}
+
+#define LOG_PW 392.0f
+
+static void draw_log_panel(float k) {
+    if (k <= 0.001f) return;
+    game_session gs;
+    game_session_get(&gs);
+    if (!gs.output[0] && getenv("STROKA_LOGS")) { /* captures : fichier de logs donné */
+        snprintf(gs.output, sizeof gs.output, "%s", getenv("STROKA_LOGS"));
+        snprintf(gs.pack_name, sizeof gs.pack_name, "Stroka SMP");
+        snprintf(gs.mc, sizeof gs.mc, "1.20.1");
+        gs.running = 1;
+    }
+    if (!gs.output[0]) return;
+    if (GetTime() - LG.last_poll > 0.25) {
+        LG.last_poll = GetTime();
+        log_poll(gs.output);
+    }
+    float e = ui_ease_out(k);
+    Rectangle r = {WIN_W - 24 - LOG_PW + (1 - e) * (LOG_PW + 40), TITLE_H + 18, LOG_PW, WIN_H - 112 - 16 - TITLE_H - 18};
+    float a = clamp01(k * 1.5f);
+    rrect(r, 20, with_alpha((Color){12, 11, 22, 238}, a));
+    rrect_lines(r, 20, 1, with_alpha(C_BORDER, a));
+
+    /* en-tête : jeu en cours, nombre de lignes, copier / dossier */
+    float pulse = 0.5f + 0.5f * sinf(ui_time * 4);
+    DrawCircleV((Vector2){r.x + 24, r.y + 27}, 4 + pulse, with_alpha(gs.running ? C_OK : C_MUTED, a));
+    text(F.bold, "Logs du jeu", r.x + 38, r.y + 15, 16, with_alpha(C_TEXT, a));
+    char sub[96];
+    snprintf(sub, sizeof sub, "%s · Minecraft %s", gs.pack_name, gs.mc);
+    text_fit(F.medium, sub, r.x + 38, r.y + 36, 11, r.width - 38 - 100, with_alpha(C_DIM, a));
+    if (bar_icon_button("log-copy", (Rectangle){r.x + r.width - 92, r.y + 12, 36, 36}, icon_copy, "Copier les logs", 1)) copy_report(&gs);
+    if (bar_icon_button("log-dir", (Rectangle){r.x + r.width - 48, r.y + 12, 36, 36}, icon_folder_fn, "Dossier des logs", 1))
+        open_logs_dir(&gs);
+    DrawRectangle((int)r.x + 14, (int)r.y + 58, (int)r.width - 28, 1, with_alpha(C_BORDER, a));
+
+    /* lignes */
+    Rectangle view = {r.x + 14, r.y + 66, r.width - 22, r.height - 76};
+    float lh = 16, total = LG.n * lh, max = fmaxf(0, total - view.height);
+    if (ui_mouse_in(view)) {
+        float w = GetMouseWheelMove();
+        if (w != 0) {
+            LG.scroll -= w * 48;
+            LG.follow = LG.scroll >= max - 2;
+        }
+    }
+    if (LG.follow) LG.scroll = max;
+    LG.scroll = fmaxf(0, fminf(LG.scroll, max));
+    int first = (int)(LG.scroll / lh);
+    BeginScissorMode((int)view.x, (int)view.y, (int)view.width, (int)view.height);
+    if (LG.n == 0) text(F.regular, "En attente des premiers logs…", view.x, view.y + 4, 12, with_alpha(C_DIM, a));
+    for (int i = first; i < LG.n && (i - first) * lh < view.height + lh; i++) {
+        int slot = (LG.head + i) % LOG_LINES;
+        const char *l = LG.lines[slot];
+        float y = view.y + i * lh - LG.scroll;
+        Color c = LG.lvl[slot] == 2 ? (Color){255, 128, 128, 255} : LG.lvl[slot] == 1 ? (Color){255, 196, 120, 255} : (Color){196, 198, 216, 255};
+        /* « [12:34:56] [Render thread/INFO]: message » : heure en gris, puis le message */
+        const char *msg = l;
+        char tm[16] = "";
+        if (l[0] == '[' && l[9] == ']' && l[3] == ':') {
+            snprintf(tm, sizeof tm, "%.8s", l + 1);
+            const char *m = strstr(l, "]: ");
+            if (m && m - l < 100) msg = m + 3;
+        }
+        float x = view.x;
+        if (tm[0]) {
+            text(F.medium, tm, x, y, 11, with_alpha(C_DIM, a * 0.8f));
+            x += 54;
+        }
+        text(F.regular, msg, x, y, 12, with_alpha(c, a));
+    }
+    EndScissorMode();
+    /* barre de défilement, et retour en bas quand on remonte dans les logs */
+    if (max > 0) {
+        float th = fmaxf(24, view.height * view.height / total), ty = view.y + (view.height - th) * (LG.scroll / max);
+        rrect((Rectangle){r.x + r.width - 7, ty, 3, th}, 1.5f, with_alpha((Color){255, 255, 255, 40}, a));
+    }
+    if (!LG.follow && max > 0) {
+        Rectangle b = {r.x + r.width / 2 - 70, r.y + r.height - 44, 140, 32};
+        if (ui_button("log-follow", b, "Revenir en bas", NULL, BTN_GHOST, 1)) LG.follow = 1;
+    }
+}
+
+/* Fenêtre « Le jeu a planté » */
+static struct {
+    int open;
+    long long seen; /* début de la dernière partie déjà traitée */
+    game_session gs;
+    char summary[600];
+    int send_state; /* 0 rien, 1 envoi en cours, 2 envoyé, -1 échec */
+    char send_err[256];
+} CR;
+
+typedef struct {
+    game_session gs;
+    char player[64], summary[600];
+    char *report;
+} crash_job;
+
+static void *crash_send_thread(void *arg) {
+    crash_job *j = arg;
+    int rc = crashreport_send(&j->gs, j->player, j->summary, j->report);
+    LOCK();
+    CR.send_state = rc == 0 ? 2 : -1;
+    snprintf(CR.send_err, sizeof CR.send_err, "%s", rc == 0 ? "" : last_error());
+    UNLOCK();
+    free(j->report);
+    free(j);
+    return NULL;
+}
+
+/* Fin de partie : fenêtre d'erreur si le jeu a planté */
+static void check_crash(void) {
+    game_session gs;
+    game_session_get(&gs);
+    if (!gs.finished || gs.started == CR.seen) return;
+    CR.seen = gs.started;
+    if (!game_session_crashed(&gs)) return;
+    CR.gs = gs;
+    crashreport_summary(&gs, CR.summary, sizeof CR.summary);
+    LOCK();
+    CR.send_state = 0;
+    UNLOCK();
+    CR.open = 1;
+}
+
+static void draw_crash_modal(float appear) {
+    DrawRectangle(0, 0, WIN_W, WIN_H, with_alpha((Color){4, 4, 10, 255}, 0.72f * appear));
+    float w = 700, h = 380;
+    Rectangle card = {(WIN_W - w) / 2, (WIN_H - h) / 2 + 12 + (1 - ui_ease_out(appear)) * 30, w, h};
+    glow(card, 26, with_alpha(C_ERR, 0.25f), 0, 40);
+    rrect(card, 26, (Color){20, 18, 32, 252});
+    rrect_lines(card, 26, 1, C_BORDER);
+    if (appear < 0.99f && !CR.open) return;
+    const game_session *gs = &CR.gs;
+
+    /* icône d'alerte */
+    Vector2 ic = {card.x + 56, card.y + 56};
+    DrawCircleV(ic, 24, with_alpha(C_ERR, 0.16f));
+    rrect((Rectangle){ic.x - 2, ic.y - 12, 4, 14}, 2, C_ERR);
+    DrawCircleV((Vector2){ic.x, ic.y + 9}, 2.6f, C_ERR);
+    text(F.bold, "Minecraft a planté", card.x + 96, card.y + 30, 24, C_TEXT);
+    char info[256];
+    snprintf(info, sizeof info, "%s · Minecraft %s · %s · code %d", gs->pack_name, gs->mc, gs->loader[0] ? gs->loader : "vanilla",
+             gs->exit_code);
+    text_fit(F.medium, info, card.x + 96, card.y + 62, 13, w - 96 - 70, C_MUTED);
+
+    /* fermer */
+    Rectangle xr = {card.x + w - 52, card.y + 20, 32, 32};
+    int xh = ui_mouse_in(xr);
+    if (xh) ui_hand();
+    rrect(xr, 10, xh ? (Color){255, 255, 255, 22} : (Color){255, 255, 255, 0});
+    Color xc = xh ? C_TEXT : C_MUTED;
+    DrawLineEx((Vector2){xr.x + 11, xr.y + 11}, (Vector2){xr.x + 21, xr.y + 21}, 2, xc);
+    DrawLineEx((Vector2){xr.x + 21, xr.y + 11}, (Vector2){xr.x + 11, xr.y + 21}, 2, xc);
+    if ((xh && ui_btn_released()) || IsKeyPressed(KEY_ESCAPE)) CR.open = 0;
+
+    /* l'erreur */
+    Rectangle box = {card.x + 32, card.y + 104, w - 64, 120};
+    rrect(box, 14, (Color){10, 9, 18, 255});
+    rrect_lines(box, 14, 1, with_alpha(C_ERR, 0.35f));
+    text_sp(F.semibold, "ERREUR", box.x + 16, box.y + 14, 10, 1.4f, (Color){255, 140, 140, 255});
+    text_wrap(F.regular, CR.summary, box.x + 16, box.y + 34, 13, box.width - 32, 19, 4, (Color){230, 220, 226, 255});
+    text_wrap(F.regular,
+              "Les logs contiennent tout ce qu'il faut pour comprendre le problème : version du launcher, du jeu, du pack et du "
+              "loader, nombre de mods, rapport de plantage et latest.log. Ton jeton de connexion n'y figure pas.",
+              card.x + 32, box.y + box.height + 16, 12, w - 64, 18, 3, C_DIM);
+
+    float by = card.y + h - 74;
+    if (ui_button("crash-copy", (Rectangle){card.x + 32, by, 190, 46}, "Copier les logs", icon_copy, BTN_GHOST, 1)) copy_report(gs);
+    if (ui_button("crash-dir", (Rectangle){card.x + 32 + 200, by, 170, 46}, "Dossier logs", icon_folder_fn, BTN_GHOST, 1))
+        open_logs_dir(gs);
+    LOCK();
+    int st = CR.send_state;
+    char err[256];
+    snprintf(err, sizeof err, "%s", CR.send_err);
+    UNLOCK();
+    const char *lbl = st == 1 ? "Envoi…" : st == 2 ? "Logs envoyés" : st == -1 ? "Réessayer l'envoi" : "Envoyer sur Discord";
+    int can = crashreport_can_send() && (st == 0 || st == -1);
+    if (ui_button("crash-send", (Rectangle){card.x + w - 32 - 236, by, 236, 46}, lbl, st == 2 ? NULL : icon_send_fn, BTN_PRIMARY, can)) {
+        crash_job *j = calloc(1, sizeof *j);
+        j->gs = *gs;
+        snprintf(j->player, sizeof j->player, "%s", g_acc.name ? g_acc.name : "");
+        snprintf(j->summary, sizeof j->summary, "%s", CR.summary);
+        j->report = build_report(gs);
+        LOCK();
+        CR.send_state = 1;
+        UNLOCK();
+        spawn(crash_send_thread, j);
+    }
+    if (st == 2) text(F.medium, "Merci ! Les logs sont sur le Discord.", card.x + w - 32 - 236, by - 22, 12, C_OK);
+    else if (st == -1) text_fit(F.medium, err, card.x + w - 32 - 300, by - 22, 12, 300, (Color){255, 150, 156, 255});
+    else if (!crashreport_can_send())
+        text_fit(F.medium, "Envoi indisponible dans cette version : copie les logs.", card.x + w - 32 - 300, by - 22, 12, 300, C_DIM);
+}
+
 static void draw_home(const snapshot *s, float oy) {
     const pack *p = current_pack();
     if (!p) {
@@ -1764,6 +2068,7 @@ static void draw_home(const snapshot *s, float oy) {
     }
 
     DrawRectangleGradientH(0, TITLE_H, 780 + SIDEBAR_W, WIN_H - TITLE_H, (Color){8, 8, 16, 230}, (Color){8, 8, 16, 0});
+    log_k = ui_ease_out(ui_anim("log-panel", s->game_running || getenv("STROKA_LOGS") ? 1.0f : 0.0f, 6));
     float t = U.switch_t;
     if (U.switch_t < SW_TOTAL) U.switch_t += fminf(GetFrameTime(), 1.0f / 30);
     int switching = t < SW_TOTAL && U.prev_sel >= 0 && U.prev_sel < U.packs.n && U.prev_sel != U.sel;
@@ -1800,6 +2105,7 @@ static void draw_home(const snapshot *s, float oy) {
     } else {
         draw_home_bar(s, U.sel, 0, 1, 1);
     }
+    draw_log_panel(log_k);
 }
 
 static void icon_plus_fn(Vector2 c, float s, Color col) {
@@ -4087,6 +4393,19 @@ int main(void) {
             else open_key_modal();
             dev_page = NULL;
         }
+        if (dev_page && strcmp(dev_page, "crash") == 0 && getenv("STROKA_LOGS")) { /* captures : fenêtre de plantage */
+            memset(&CR.gs, 0, sizeof CR.gs);
+            snprintf(CR.gs.output, sizeof CR.gs.output, "%s", getenv("STROKA_LOGS"));
+            snprintf(CR.gs.instance, sizeof CR.gs.instance, "/tmp");
+            snprintf(CR.gs.pack_name, sizeof CR.gs.pack_name, "Stroka SMP");
+            snprintf(CR.gs.mc, sizeof CR.gs.mc, "1.20.1");
+            snprintf(CR.gs.loader, sizeof CR.gs.loader, "forge 47.2.0");
+            CR.gs.exit_code = 1;
+            CR.gs.started = 0;
+            crashreport_summary(&CR.gs, CR.summary, sizeof CR.summary);
+            CR.open = 1;
+            dev_page = NULL;
+        }
         if (dev_import && current_pack()) {
             dev_import = 0;
             U.page = PAGE_SETTINGS;
@@ -4103,11 +4422,13 @@ int main(void) {
             U.last_game_running = s.game_running;
         }
 
+        check_crash();
         um_take_search();
         update_music(&s);
         update_accent();
         update_key_refresh();
-        ui_begin_frame(U.login_open || U.um_open || U.mig_open || U.sp_open || U.key_open || U.players_open || U.inst_open || U.uninst_open);
+        ui_begin_frame(U.login_open || U.um_open || U.mig_open || U.sp_open || U.key_open || U.players_open || U.inst_open || U.uninst_open ||
+                       CR.open);
         BeginDrawing();
         ClearBackground(C_BG);
         /* fond animé : thème du pack affiché (l'ancien pack tant que son fond n'est pas sorti) */
@@ -4144,6 +4465,8 @@ int main(void) {
         if (!U.login_open && (U.players_open || pl_appear > 0.02f)) draw_players_modal(&s, pl_appear);
         float key_appear = ui_anim("key-modal", U.key_open ? 1.0f : 0.0f, 12);
         if (!U.login_open && (U.key_open || key_appear > 0.02f)) draw_key_modal(key_appear);
+        float cr_appear = ui_anim("crash-modal", CR.open ? 1.0f : 0.0f, 12);
+        if (!U.login_open && (CR.open || cr_appear > 0.02f)) draw_crash_modal(cr_appear);
         ui_layer = 0;
         ui_end_frame(WIN_W, TITLE_H);
 

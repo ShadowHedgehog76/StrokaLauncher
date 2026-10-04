@@ -34,7 +34,8 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: printf 'SUPABASE_URL=%s\nSUPABASE_KEY=%s\n' "$SUPABASE_URL" "$SUPABASE_KEY" > supabase.env
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: printf 'SUPABASE_URL=%s\nSUPABASE_KEY=%s\nDISCORD_WEBHOOK=%s\n' "$SUPABASE_URL" "$SUPABASE_KEY" "$DISCORD_WEBHOOK" > supabase.env
 
       - name: Copie pour la version Intel
         run: rsync -a --exclude .git ./ ../x86_64/
@@ -82,7 +83,8 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: printf 'SUPABASE_URL=%s\nSUPABASE_KEY=%s\n' "$SUPABASE_URL" "$SUPABASE_KEY" > supabase.env
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: printf 'SUPABASE_URL=%s\nSUPABASE_KEY=%s\nDISCORD_WEBHOOK=%s\n' "$SUPABASE_URL" "$SUPABASE_KEY" "$DISCORD_WEBHOOK" > supabase.env
 
       - name: Compilation
         run: make -j4 all
@@ -126,7 +128,8 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: printf 'SUPABASE_URL=%s\nSUPABASE_KEY=%s\n' "$SUPABASE_URL" "$SUPABASE_KEY" > supabase.env
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: printf 'SUPABASE_URL=%s\nSUPABASE_KEY=%s\nDISCORD_WEBHOOK=%s\n' "$SUPABASE_URL" "$SUPABASE_KEY" "$DISCORD_WEBHOOK" > supabase.env
 
       - name: Compilation
         run: make -j4 all CC=gcc HOSTCC=gcc

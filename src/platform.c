@@ -178,6 +178,65 @@ int run_process(char *const argv[], const char *cwd) {
 #endif
 }
 
+int run_process_log(char *const argv[], const char *cwd, const char *log_path) {
+    if (!log_path) return run_process(argv, cwd);
+    mkdirs_parent(log_path);
+#ifdef _WIN32
+    SECURITY_ATTRIBUTES sa = {sizeof sa, NULL, TRUE}; /* poignée héritée par le jeu */
+    HANDLE out = CreateFileA(log_path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, &sa, CREATE_ALWAYS,
+                             FILE_ATTRIBUTE_NORMAL, NULL);
+    if (out == INVALID_HANDLE_VALUE) return run_process(argv, cwd);
+    sbuf cmd;
+    sb_init(&cmd);
+    for (int i = 0; argv[i]; i++) {
+        if (i) sb_add(&cmd, " ");
+        append_quoted(&cmd, argv[i]);
+    }
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    memset(&si, 0, sizeof si);
+    si.cb = sizeof si;
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdOutput = out;
+    si.hStdError = out;
+    memset(&pi, 0, sizeof pi);
+    BOOL ok = CreateProcessA(NULL, cmd.s, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, cwd, &si, &pi);
+    sb_free(&cmd);
+    CloseHandle(out);
+    if (!ok) return -1;
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD code = 0;
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return (int)code;
+#else
+    FILE *f = fopen(log_path, "w");
+    if (!f) return run_process(argv, cwd);
+    fflush(stdout);
+    fflush(stderr);
+    pid_t pid = fork();
+    if (pid < 0) {
+        fclose(f);
+        return -1;
+    }
+    if (pid == 0) {
+        dup2(fileno(f), 1);
+        dup2(fileno(f), 2);
+        if (cwd && chdir(cwd) != 0) _exit(127);
+        execvp(argv[0], argv);
+        _exit(127);
+    }
+    fclose(f);
+    int status;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) return -1;
+    }
+    return WIFEXITED(status) ? WEXITSTATUS(status) : WIFSIGNALED(status) ? 128 + WTERMSIG(status) : -1;
+#endif
+}
+
 /* Chemin de l'exécutable en cours (séparateurs « / »), à libérer ; NULL si inconnu */
 char *self_exe_path(void) {
 #ifdef _WIN32
@@ -291,6 +350,102 @@ static void safe_prompt(const char *in, char *out, size_t n) {
     out[o] = '\0';
 }
 #endif
+
+#ifndef _WIN32
+/* Toutes les lignes de la sortie d'une commande (chemins choisis), ajoutées à out */
+static int read_command_lines(const char *cmd, char sep, strvec *out, int *missing) {
+    if (missing) *missing = 0;
+    FILE *f = popen(cmd, "r");
+    if (!f) return 0;
+    sbuf b;
+    sb_init(&b);
+    char buf[4096];
+    size_t r;
+    while ((r = fread(buf, 1, sizeof buf, f)) > 0) sb_addn(&b, buf, r);
+    int rc = pclose(f);
+    if (missing && WIFEXITED(rc) && WEXITSTATUS(rc) == 127) *missing = 1;
+    int n = 0;
+    if (rc == 0 && b.s) {
+        for (char *line = b.s; line && *line;) {
+            char *end = strchr(line, sep);
+            if (!end) end = strchr(line, '\n');
+            if (end) *end = '\0';
+            line[strcspn(line, "\r\n")] = '\0';
+            if (line[0]) {
+                sv_push(out, line);
+                n++;
+            }
+            line = end ? end + 1 : NULL;
+        }
+    }
+    sb_free(&b);
+    return n;
+}
+#endif
+
+int sys_pick_multi(int kind, const char *prompt, strvec *out) {
+#ifdef _WIN32
+    size_t cap = 1 << 16;
+    char *buf = calloc(1, cap);
+    OPENFILENAMEA ofn;
+    memset(&ofn, 0, sizeof ofn);
+    ofn.lStructSize = sizeof ofn;
+    ofn.lpstrFile = buf;
+    ofn.nMaxFile = (DWORD)cap;
+    ofn.lpstrTitle = prompt;
+    ofn.lpstrFilter = kind == PICK_JAR     ? "Mods (*.jar)\0*.jar\0"
+                      : kind == PICK_AUDIO ? "Musique (*.ogg;*.mp3;*.wav)\0*.ogg;*.mp3;*.wav\0"
+                                           : "Images (*.png;*.jpg;*.jpeg)\0*.png;*.jpg;*.jpeg\0";
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_ALLOWMULTISELECT | OFN_EXPLORER;
+    int n = 0;
+    if (GetOpenFileNameA(&ofn)) {
+        /* un fichier : chemin complet ; plusieurs : dossier\0fichier1\0fichier2\0\0 */
+        const char *dir = buf, *p = buf + strlen(buf) + 1;
+        if (!*p) {
+            sv_push(out, dir);
+            n = 1;
+        } else {
+            for (; *p; p += strlen(p) + 1) {
+                sv_push_owned(out, xasprintf("%s\\%s", dir, p));
+                n++;
+            }
+        }
+        for (size_t i = out->n - (size_t)n; i < out->n; i++)
+            for (char *c = out->v[i]; *c; c++)
+                if (*c == '\\') *c = '/';
+    }
+    free(buf);
+    return n;
+#else
+    char title[256];
+    safe_prompt(prompt, title, sizeof title);
+    char *cmd;
+    int n;
+#ifdef __APPLE__
+    const char *types = kind == PICK_JAR ? "{\"jar\", \"public.data\"}" : kind == PICK_AUDIO ? "{\"ogg\", \"mp3\", \"wav\", \"public.audio\"}"
+                                                                                              : "{\"png\", \"jpg\", \"jpeg\", \"public.png\", \"public.jpeg\"}";
+    cmd = xasprintf("osascript -e 'set f to choose file with prompt \"%s\" of type %s with multiple selections allowed' "
+                    "-e 'set o to \"\"' -e 'repeat with x in f' -e 'set o to o & POSIX path of x & linefeed' -e 'end repeat' "
+                    "-e 'return o' 2>/dev/null",
+                    title, types);
+    n = read_command_lines(cmd, '\n', out, NULL);
+    free(cmd);
+    return n;
+#else
+    const char *zf = kind == PICK_JAR ? "--file-filter='*.jar'" : kind == PICK_AUDIO ? "--file-filter='*.ogg *.mp3 *.wav'" : "--file-filter='*.png *.jpg *.jpeg'";
+    int missing;
+    cmd = xasprintf("zenity --file-selection --multiple --separator='|' --title=\"%s\" %s 2>/dev/null", title, zf);
+    n = read_command_lines(cmd, '|', out, &missing);
+    free(cmd);
+    if (n || !missing) return n;
+    cmd = xasprintf("kdialog --title \"%s\" --multiple --separate-output --getopenfilename . '%s' 2>/dev/null", title,
+                    kind == PICK_JAR ? "*.jar" : kind == PICK_AUDIO ? "*.ogg *.mp3 *.wav" : "*.png *.jpg *.jpeg");
+    n = read_command_lines(cmd, '\n', out, NULL);
+    free(cmd);
+    return n;
+#endif
+#endif
+}
 
 char *sys_pick(int kind, const char *prompt) {
 #ifdef _WIN32

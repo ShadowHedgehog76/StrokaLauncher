@@ -22,6 +22,10 @@ int http_request_ex(const char *method, const char *url, const char *const *head
                     http_resp *r);
 void http_resp_free(http_resp *r);
 
+/* POST multipart/form-data : champ texte « payload_json » + un fichier « files[0] » (webhooks Discord).
+ * 0 si la requête a abouti (voir r->status). */
+int http_post_file(const char *url, const char *payload_json, const char *file_name, const void *data, size_t len, http_resp *r);
+
 /* GET + parse JSON ; NULL en cas d'échec */
 cJSON *http_get_json(const char *url);
 

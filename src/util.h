@@ -56,6 +56,8 @@ int remove_tree(const char *path);
 
 /* Lance un processus et attend sa fin (sans fenêtre de console sous Windows). Code de sortie ou -1. */
 int run_process(char *const argv[], const char *cwd);
+/* Idem, sortie standard et erreurs du processus écrites dans log_path (fichier remplacé) */
+int run_process_log(char *const argv[], const char *cwd, const char *log_path);
 
 int mkdir_one(const char *path);
 int move_file(const char *src, const char *dst); /* remplace la destination si elle existe */
@@ -69,7 +71,9 @@ char *self_exe_path(void);                        /* exécutable en cours, à li
 int spawn_detached(char *const argv[]);           /* lance sans attendre (redémarrage) */
 
 enum { PICK_FOLDER, PICK_IMAGE, PICK_JAR, PICK_AUDIO };
-char *sys_pick(int kind, const char *prompt);     /* fenêtre de choix du système ; chemin à libérer, NULL si annulé */
+char *sys_pick(int kind, const char *prompt);
+/* Choix de plusieurs fichiers (PICK_JAR, PICK_AUDIO, PICK_IMAGE) ; chemins ajoutés à out, nombre choisi (0 si annulé) */
+int sys_pick_multi(int kind, const char *prompt, strvec *out);     /* fenêtre de choix du système ; chemin à libérer, NULL si annulé */
 
 /* Dossier de données du launcher (créé si besoin) */
 const char *data_dir(void);

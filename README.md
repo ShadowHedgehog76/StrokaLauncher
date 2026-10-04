@@ -46,7 +46,8 @@ Sous Linux, les fenêtres de choix de fichier utilisent `zenity` (GNOME) ou `kdi
   données » est coché.
 
 Avant le premier build, ajoute dans **Settings → Secrets and variables → Actions** les secrets `SUPABASE_URL` et
-`SUPABASE_KEY` (clé publishable). Pour publier une version : `git tag v1.0.0 && git push origin v1.0.0` — une
+`SUPABASE_KEY` (clé publishable), et `DISCORD_WEBHOOK` (webhook du salon qui reçoit les rapports de plantage ;
+sans lui, le bouton « Envoyer sur Discord » est désactivé). Pour publier une version : `git tag v1.0.0 && git push origin v1.0.0` — une
 release GitHub est créée avec tous les paquets.
 
 ### Mises à jour automatiques du launcher
@@ -112,6 +113,14 @@ jamais la clé `service_role` / `sb_secret_…`). Le schéma de la base est dans
 - **Musique** : la musique des menus du pack affiché (son `.ogg` FancyMenu, téléchargé une fois) joue en
   boucle dans le launcher, avec un fondu. Elle s'efface quand Minecraft est lancé ou quand la fenêtre est
   réduite, et reprend au même endroit. Désactivable dans Réglages → *Pendant le jeu*.
+- **Logs en direct** : pendant la partie, un panneau à droite de l'accueil affiche la sortie du jeu
+  (avertissements en orange, erreurs et piles d'appels en rouge), avec Copier et Dossier des logs ; les cartes
+  se resserrent pour lui laisser la place.
+- **Plantage** : si le jeu se ferme sur une erreur (code de sortie, rapport de `crash-reports/` ou `hs_err_pid`),
+  une fenêtre affiche l'erreur (« Description » + exception du rapport, sinon dernière exception des logs)
+  avec **Copier les logs** et **Envoyer sur Discord** (webhook). Le rapport contient la version du launcher,
+  le système, le joueur, le pack (révision), Minecraft, le loader, Java, la mémoire, le nombre de mods, le code de
+  sortie, puis le rapport de plantage et `latest.log` ; le jeton de session et le dossier personnel sont masqués.
 - Réglages → *À propos* : version du launcher, boutons **GitHub** et **Signaler un problème** (nouvelle issue).
 - Configs : installées si absentes, mises à jour seulement quand le pack les modifie (les réglages du
   joueur sont gardés sinon).
@@ -150,7 +159,8 @@ pré-remplie dans « Mes mods », pour les captures), `STROKA_PAGE=import|solo|s
 | `gui/app.c` | interface du launcher |
 | `gui/brand.c` | visuels de la marque rendus en PNG (logo, bannière, boutons, titre) |
 | `gui/ui.c`, `gui/draw.c`, `gui/scene.c` | boîte à outils d'interface partagée, dessin, fond animé |
-| `src/game.c` | installation vanilla + loaders, arguments, lancement |
+| `src/game.c` | installation vanilla + loaders, arguments, lancement, suivi de la partie (sortie, plantage) |
+| `src/crashreport.c` | rapport de plantage (versions, pack, logs, données sensibles masquées), envoi par webhook Discord |
 | `src/pack.c`, `src/sync.c` | modèle de pack, synchronisation des fichiers, `servers.dat` |
 | `src/updater.c`, `src/installer.c` | mise à jour automatique (releases GitHub) ; installation depuis une copie portable |
 | `src/platform.c`, `src/zip.c` | code propre à chaque système (processus, fenêtres de choix, dossiers), lecture des .jar |

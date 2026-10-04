@@ -99,6 +99,40 @@ int http_request(const char *method, const char *url, const char *const *headers
     return http_request_ex(method, url, headers, body, body ? strlen(body) : 0, r);
 }
 
+int http_post_file(const char *url, const char *payload_json, const char *file_name, const void *data, size_t len, http_resp *r) {
+    memset(r, 0, sizeof *r);
+    CURL *h = curl_easy_init();
+    if (!h) return -1;
+    sbuf b;
+    sb_init(&b);
+    curl_mime *mime = curl_mime_init(h);
+    curl_mimepart *part = curl_mime_addpart(mime);
+    curl_mime_name(part, "payload_json");
+    curl_mime_data(part, payload_json, CURL_ZERO_TERMINATED);
+    curl_mime_type(part, "application/json");
+    part = curl_mime_addpart(mime);
+    curl_mime_name(part, "files[0]");
+    curl_mime_filename(part, file_name);
+    curl_mime_data(part, data, len);
+    curl_mime_type(part, "text/plain");
+    curl_easy_setopt(h, CURLOPT_URL, url);
+    curl_easy_setopt(h, CURLOPT_MIMEPOST, mime);
+    curl_easy_setopt(h, CURLOPT_USERAGENT, USER_AGENT);
+    use_system_ca(h);
+    curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, mem_write);
+    curl_easy_setopt(h, CURLOPT_WRITEDATA, &b);
+    curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 20L);
+    curl_easy_setopt(h, CURLOPT_TIMEOUT, 120L);
+    CURLcode rc = curl_easy_perform(h);
+    if (rc == CURLE_OK) curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &r->status);
+    else set_error("réseau : %s", curl_easy_strerror(rc));
+    curl_mime_free(mime);
+    curl_easy_cleanup(h);
+    r->body = b.s;
+    r->len = b.len;
+    return rc == CURLE_OK ? 0 : -1;
+}
+
 void http_resp_free(http_resp *r) {
     free(r->body);
     r->body = NULL;
