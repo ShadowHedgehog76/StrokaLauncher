@@ -22,6 +22,7 @@
 #include "localpacks.h"
 #include "migrate.h"
 #include "modmeta.h"
+#include "p2p.h"
 #include "pack.h"
 #include "ping.h"
 #include "raylib.h"
@@ -3932,7 +3933,7 @@ static void draw_settings(const snapshot *s, float oy) {
     page_header("Paramètres", "Règle le launcher et la mémoire allouée au jeu.", oy);
 
     /* contenu défilant sous l'en-tête */
-    const float view_top = 166, content_end = 1060;
+    const float view_top = 166, content_end = 1110;
     float max_scroll = fmaxf(0, content_end - WIN_H);
     if (!U.um_open && !U.mig_open && !U.sp_open && !U.key_open && !U.login_open && ui_mouse_pos().y > view_top) U.settings_scroll -= GetMouseWheelMove() * 40;
     U.settings_scroll = fmaxf(0, fminf(U.settings_scroll, max_scroll));
@@ -3980,7 +3981,7 @@ static void draw_settings(const snapshot *s, float oy) {
     Vector2 hm = measure(F.medium, hi, 12);
     text(F.medium, hi, track.x + track.width - hm.x, track.y + 16, 12, C_DIM);
 
-    r = section(326 + oy, 186, "Pendant le jeu", "Options appliquées au lancement de Minecraft.");
+    r = section(326 + oy, 236, "Pendant le jeu", "Options appliquées au lancement de Minecraft.");
     text(F.semibold, "Rejoindre directement le serveur du pack", r.x + 28, r.y + 80, 15, C_TEXT);
     if (ui_toggle("tg-join", (Rectangle){r.x + r.width - 80, r.y + 74, 52, 30}, U.cfg.join_server)) {
         U.cfg.join_server = !U.cfg.join_server;
@@ -3998,7 +3999,33 @@ static void draw_settings(const snapshot *s, float oy) {
         settings_save(&U.cfg);
     }
 
-    r = section(528 + oy, 130, "Mods pour tous les packs",
+    text(F.semibold, "Partager les packs avec les launchers du réseau local", r.x + 28, r.y + 188, 15, C_TEXT);
+    {
+        int nf = 0, ns = 0;
+        long long nb = 0;
+        static double st_t = -10;
+        static int c_nf, c_ns;
+        static long long c_nb;
+        if (GetTime() - st_t > 1.0) {
+            p2p_stats(&c_nf, &c_ns, &c_nb);
+            st_t = GetTime();
+        }
+        nf = c_nf, ns = c_ns, nb = c_nb;
+        char line[200];
+        if (!U.cfg.lan_share) snprintf(line, sizeof line, "Désactivé : tout est téléchargé depuis Internet.");
+        else if (ns > 0)
+            snprintf(line, sizeof line, "%d fichiers proposés · %d envoyés (%.1f Mo) depuis l'ouverture du launcher", nf, ns, nb / 1048576.0);
+        else snprintf(line, sizeof line, "Fichiers récupérés d'abord chez les autres launchers du réseau (vérifiés), sinon sur Internet · %d proposés", nf);
+        text_fit(F.regular, line, r.x + 28, r.y + 210, 12, r.width - 140, C_DIM);
+    }
+    if (ui_toggle("tg-lan", (Rectangle){r.x + r.width - 80, r.y + 186, 52, 30}, U.cfg.lan_share)) {
+        U.cfg.lan_share = !U.cfg.lan_share;
+        p2p_set_enabled(U.cfg.lan_share);
+        if (U.cfg.lan_share) p2p_start();
+        settings_save(&U.cfg);
+    }
+
+    r = section(578 + oy, 130, "Mods pour tous les packs",
                 "Ajoutés à chaque pack, dans la version adaptée ; un pack qui fournit déjà le mod garde sa version.");
     {
         static user_mod_list cache;
@@ -4031,7 +4058,7 @@ static void draw_settings(const snapshot *s, float oy) {
         if (U.um_open) cache_t = -10; /* relu à la fermeture de la fenêtre */
     }
 
-    r = section(674 + oy, 110, "Importer depuis un autre launcher",
+    r = section(724 + oy, 110, "Importer depuis un autre launcher",
                 "Prism, Modrinth, CurseForge… : retrouve tes touches, tes mondes et les données de tes mods dans ce pack.");
     {
         const pack *cp = current_pack();
@@ -4043,7 +4070,7 @@ static void draw_settings(const snapshot *s, float oy) {
             open_import();
     }
 
-    r = section(800 + oy, 110, "Compte",
+    r = section(850 + oy, 110, "Compte",
                 s->name[0] ? "Tes jetons de connexion sont stockés localement, lisibles uniquement par ton utilisateur."
                            : "Aucun compte connecté.");
     int busy = s->task != TASK_IDLE;
@@ -4077,7 +4104,7 @@ static void draw_settings(const snapshot *s, float oy) {
         if (st == 2) snprintf(line, sizeof line, "Stroka Launcher %s  ·  version %s disponible (bouton en haut à droite)", LAUNCHER_VERSION, v);
         else if (st == 1) snprintf(line, sizeof line, "Stroka Launcher %s  ·  à jour", LAUNCHER_VERSION);
         else snprintf(line, sizeof line, "Stroka Launcher %s", LAUNCHER_VERSION);
-        r = section(926 + oy, 110, "À propos", "");
+        r = section(976 + oy, 110, "À propos", "");
         text(F.medium, line, r.x + 28, r.y + 48, 13, st == 2 ? C_ACCENT : C_MUTED);
         char target[64];
         if (install_available(target, sizeof target)) {
@@ -4296,6 +4323,9 @@ int main(void) {
     data_dir();
     settings_load(&U.cfg);
     packs_set_access_keys(U.cfg.access_keys);
+    /* partage sur le réseau local : ce launcher sert les fichiers qu'il a, et cherche ceux qui lui manquent */
+    p2p_set_enabled(U.cfg.lan_share);
+    if (U.cfg.lan_share && !getenv("STROKA_SCREENSHOT")) p2p_start();
     /* copie portable (Téléchargements, image disque, AppImage) : proposer l'installation */
     if (!U.cfg.install_dismissed && !getenv("STROKA_SCREENSHOT") && install_available(U.inst_target, sizeof U.inst_target))
         U.inst_open = 1;

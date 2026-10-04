@@ -9,6 +9,7 @@ typedef struct {
     char selected_pack[64]; /* slug du dernier pack choisi */
     char access_keys[512];  /* clés des packs privés, séparées par des virgules */
     int install_dismissed;  /* « Ne plus demander » : pas de proposition d'installation au démarrage */
+    int lan_share;          /* partage des fichiers avec les launchers du réseau local */
 } settings;
 
 void settings_load(settings *s);

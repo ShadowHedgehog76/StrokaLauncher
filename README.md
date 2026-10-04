@@ -113,6 +113,13 @@ jamais la clé `service_role` / `sb_secret_…`). Le schéma de la base est dans
 - **Musique** : la musique des menus du pack affiché (son `.ogg` FancyMenu, téléchargé une fois) joue en
   boucle dans le launcher, avec un fondu. Elle s'efface quand Minecraft est lancé ou quand la fenêtre est
   réduite, et reprend au même endroit. Désactivable dans Réglages → *Pendant le jeu*.
+- **Partage sur le réseau local** (Réglages → *Pendant le jeu*, activé par défaut) : chaque launcher ouvert
+  propose aux autres launchers du réseau les fichiers qu'il a déjà (pack, mods, Minecraft, Java, assets). Avant
+  un téléchargement, le launcher cherche les autres (diffusion UDP sur le port 47863), leur demande lesquels ont
+  les fichiers manquants, et les récupère chez eux (HTTP, port 47864). Les fichiers sont demandés par leur
+  empreinte SHA1, jamais par un chemin, et vérifiés à l'arrivée ; un fichier absent, modifié ou un launcher
+  fermé, et le fichier est repris sur Internet. Au premier lancement, Windows demande d'autoriser le launcher
+  dans le pare-feu (réseau privé).
 - **Logs en direct** : pendant la partie, un panneau à droite de l'accueil affiche la sortie du jeu
   (avertissements en orange, erreurs et piles d'appels en rouge), avec Copier et Dossier des logs ; les cartes
   se resserrent pour lui laisser la place.
@@ -160,6 +167,7 @@ pré-remplie dans « Mes mods », pour les captures), `STROKA_PAGE=import|solo|s
 | `gui/brand.c` | visuels de la marque rendus en PNG (logo, bannière, boutons, titre) |
 | `gui/ui.c`, `gui/draw.c`, `gui/scene.c` | boîte à outils d'interface partagée, dessin, fond animé |
 | `src/game.c` | installation vanilla + loaders, arguments, lancement, suivi de la partie (sortie, plantage) |
+| `src/p2p.c` | partage des fichiers entre launchers du réseau local (index SHA1, serveur, recherche) |
 | `src/crashreport.c` | rapport de plantage (versions, pack, logs, données sensibles masquées), envoi par webhook Discord |
 | `src/pack.c`, `src/sync.c` | modèle de pack, synchronisation des fichiers, `servers.dat` |
 | `src/updater.c`, `src/installer.c` | mise à jour automatique (releases GitHub) ; installation depuis une copie portable |

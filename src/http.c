@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "report.h"
+#include "p2p.h"
 #include "util.h"
 
 #define USER_AGENT "StrokaLauncher/1.0"
@@ -203,7 +204,11 @@ typedef struct {
     int insecure; /* certificat refusé (HTTPS intercepté) : retéléchargé sans vérification, empreinte SHA1 contrôlée */
     int http1;    /* connexion coupée : nouvel essai en HTTP/1.1 (certains antivirus / box gèrent mal HTTP/2) */
     long long not_before; /* nouvel essai pas avant cet instant (mono_ms), pour laisser le réseau souffler */
+    char *p2p;            /* adresse du fichier chez un launcher du réseau local (essayée d'abord), NULL sinon */
+    int from_p2p;         /* transfert en cours depuis le réseau local */
 } xfer;
+
+static int g_p2p_files; /* fichiers récupérés sur le réseau local pendant ce dl_run */
 
 /* Téléchargements simultanés : réduits quand les connexions sont coupées (réseau saturé, antivirus, box…) */
 static int g_parallel = PARALLEL;
@@ -294,12 +299,14 @@ static int start_xfer(CURLM *m, xfer *x) {
     sha1_init(&x->sha);
 
     CURL *h = curl_easy_init();
-    curl_easy_setopt(h, CURLOPT_URL, x->it->url);
+    x->from_p2p = x->p2p != NULL;
+    curl_easy_setopt(h, CURLOPT_URL, x->from_p2p ? x->p2p : x->it->url);
     curl_easy_setopt(h, CURLOPT_USERAGENT, USER_AGENT);
-    use_system_ca(h);
+    if (x->from_p2p) curl_easy_setopt(h, CURLOPT_NOPROXY, "*"); /* réseau local : jamais par un proxy */
+    else use_system_ca(h);
     curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(h, CURLOPT_FAILONERROR, 1L);
-    curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 20L);
+    curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, x->from_p2p ? 3L : 20L);
     curl_easy_setopt(h, CURLOPT_LOW_SPEED_LIMIT, 1024L);
     curl_easy_setopt(h, CURLOPT_LOW_SPEED_TIME, 30L);
     curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, file_write);
@@ -332,9 +339,17 @@ static int finish_xfer(xfer *x, CURLcode res) {
     }
     if (ok && move_file(x->tmp, x->it->path) == 0) {
         if (x->it->executable) file_executable(x->it->path);
+        if (x->it->sha1[0]) p2p_index_add(x->it->sha1, x->it->size, x->it->path); /* proposé aux autres launchers */
+        if (x->from_p2p) g_p2p_files++;
         return 1;
     }
     unlink(x->tmp);
+    /* échec depuis le réseau local (fichier absent, modifié, launcher fermé…) : repris sur Internet, sans compter d'essai */
+    if (x->from_p2p) {
+        free(x->p2p);
+        x->p2p = NULL;
+        return 0;
+    }
     /* certificat refusé : connexion interceptée. Fichier à l'empreinte connue : nouvel essai sans vérifier le
      * certificat, l'empreinte SHA1 garantissant que le fichier n'a pas été modifié en route. */
     if (res == CURLE_PEER_FAILED_VERIFICATION && x->it->sha1[0] && !x->insecure) {
@@ -367,12 +382,25 @@ int dl_run(dl_list *l, const char *label) {
     /* Ne garder que ce qui manque */
     size_t total = 0;
     xfer *xs = calloc(l->n ? l->n : 1, sizeof(xfer));
-    for (size_t i = 0; i < l->n; i++)
+    for (size_t i = 0; i < l->n; i++) {
         if (!is_present(&l->v[i])) xs[total++].it = &l->v[i];
+        else if (l->v[i].sha1[0]) p2p_index_add(l->v[i].sha1, l->v[i].size, l->v[i].path); /* déjà là : partageable */
+    }
 
     if (total == 0) {
         free(xs);
         return 0;
+    }
+
+    /* d'abord les launchers du réseau local qui ont déjà ces fichiers */
+    g_p2p_files = 0;
+    if (p2p_enabled()) {
+        char **hashes = calloc(total, sizeof(char *)), **urls = calloc(total, sizeof(char *));
+        for (size_t i = 0; i < total; i++) hashes[i] = xs[i].it->sha1[0] ? xs[i].it->sha1 : NULL;
+        if (p2p_locate(hashes, total, urls) > 0) report_status("Fichiers trouvés sur le réseau local…");
+        for (size_t i = 0; i < total; i++) xs[i].p2p = urls[i];
+        free(hashes);
+        free(urls);
     }
 
     /* File d'attente circulaire : un élément y est au plus une fois (il y revient en cas de réessai) */
@@ -451,8 +479,11 @@ int dl_run(dl_list *l, const char *label) {
             unlink(x->tmp);
         }
         free(x->tmp);
+        free(x->p2p);
     }
     curl_multi_cleanup(m);
+    if (g_p2p_files > 0) report_notice("%d fichier%s récupéré%s depuis un launcher du réseau local", g_p2p_files, g_p2p_files > 1 ? "s" : "",
+                                       g_p2p_files > 1 ? "s" : "");
     free(xs);
     free(queue);
     return failed ? -1 : 0;
