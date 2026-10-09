@@ -22,3 +22,6 @@ supabase.env
 # Outils privés : app admin (sources, règles de compilation, musique des menus du jeu)
 admin/
 assets/music/
+
+# Moodboard (design de l'app, local)
+moodboard/

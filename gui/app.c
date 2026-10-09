@@ -45,6 +45,13 @@
 #define WIN_H 700
 #define TITLE_H 44
 #define SIDEBAR_W 84 /* place laissée à gauche pour la bulle des packs (flottante, par-dessus la page) */
+/* Accueil : rail des packs à gauche, profil en haut, rangée du bas (Bibliothèque · infos · Jouer ▾) */
+#define RAIL_X 16
+#define RAIL_W 76
+#define RAIL_TOP (TITLE_H + 86)
+#define ROW_H 66
+#define ROW_Y (WIN_H - 22 - ROW_H)
+#define RAIL_BOTTOM (ROW_Y - 16)
 #define MAX_PACKS 64
 
 typedef enum { PAGE_HOME, PAGE_MODS, PAGE_SETTINGS, PAGE_SOLO } page_t;
@@ -194,6 +201,10 @@ static struct {
     mig_list mig;
     float mig_scroll;
     float switch_t; /* temps écoulé depuis le changement (avancé image par image : un blocage ne saute pas l'animation) */
+    /* nouvelle interface : panneau Bibliothèque, menus (1 : Jouer ▾, 2 : + du rail) */
+    int lib_open, lib_filter, menu_open;
+    char lib_query[64];
+    float lib_scroll, rail_scroll;
 } U;
 
 static const pack *current_pack(void) { return U.sel >= 0 && U.sel < U.packs.n ? &U.packs.v[U.sel] : NULL; }
@@ -1159,16 +1170,6 @@ static void update_head_texture(void) {
     UnloadImage(img);
 }
 
-static void draw_head(Rectangle r, int logged) {
-    if (U.has_head && logged) {
-        rrect((Rectangle){r.x - 2, r.y - 2, r.width + 4, r.height + 4}, 10, with_alpha(C_ACCENT, 0.5f));
-        DrawTexturePro(U.head, (Rectangle){0, 0, 8, 8}, r, (Vector2){0, 0}, 0, WHITE);
-    } else {
-        rrect(r, 10, C_PANEL_HI);
-        icon_user((Vector2){r.x + r.width / 2, r.y + r.height / 2}, r.width * 0.55f, C_MUTED);
-    }
-}
-
 /* ---------- barre latérale ---------- */
 
 static void icon_mods_fn(Vector2 c, float s, Color col) { icon_cube(c, s, col, with_alpha(col, 0.7f), with_alpha(col, 0.45f)); }
@@ -1201,7 +1202,7 @@ static void draw_sidebar_tooltip(float cy, const char *title, const char *sub, C
     if (a <= 0.01f) return;
     Vector2 mt = measure(F.bold, title, 14), ms = sub ? measure(F.medium, sub, 12) : (Vector2){0, 0};
     float w = fmaxf(mt.x, ms.x) + 28, h = sub ? 52 : 34;
-    Rectangle t = {SIDEBAR_W + 10 - 6 * (1 - a), cy - h / 2, w, h};
+    Rectangle t = {RAIL_X + RAIL_W + 10 - 6 * (1 - a), cy - h / 2, w, h};
     Color bg = (Color){24, 21, 38, (unsigned char)(248 * a)};
     glow(t, 10, with_alpha((Color){0, 0, 0, 255}, 0.35f * a), 0, 16);
     rrect(t, 10, bg);
@@ -1258,15 +1259,6 @@ static void draw_home_nav(float oy) {
     }
 }
 
-/* Bouton carré de la barre du bas (icône seule, libellé en bulle au survol) */
-/* Crayon incliné */
-static void icon_pencil_fn(Vector2 c, float s, Color col) {
-    Vector2 a = {c.x - s * 0.3f, c.y + s * 0.3f}, b = {c.x + s * 0.22f, c.y - s * 0.22f};
-    DrawLineEx(a, b, s * 0.16f, col);
-    DrawTriangle((Vector2){a.x - s * 0.1f, a.y + s * 0.1f}, (Vector2){a.x + s * 0.02f, a.y + s * 0.1f}, (Vector2){a.x - s * 0.1f, a.y - s * 0.02f}, col);
-    DrawTriangle((Vector2){a.x - s * 0.1f, a.y + s * 0.1f}, (Vector2){a.x - s * 0.1f, a.y - s * 0.02f}, (Vector2){a.x + s * 0.02f, a.y + s * 0.1f}, col);
-    DrawLineEx((Vector2){b.x + s * 0.04f, b.y - s * 0.04f}, (Vector2){b.x + s * 0.12f, b.y - s * 0.12f}, s * 0.16f, col);
-}
 static void open_solo_pack(int edit);
 
 static int bar_icon_button(const char *id, Rectangle r, icon_fn icon, const char *label, int enabled) {
@@ -1301,120 +1293,60 @@ static void icon_key_fn(Vector2 c, float s, Color col) {
     DrawRectangleRec((Rectangle){c.x + s * 0.36f, c.y, s * 0.08f, s * 0.12f}, col);
 }
 
-/* Globe : cercle, méridien et équateur */
-static void icon_globe_fn(Vector2 c, float s, Color col) {
-    float r = s * 0.42f;
-    DrawRing(c, r - s * 0.07f, r, 0, 360, 36, col);
-    DrawEllipseLines((int)c.x, (int)c.y, r * 0.45f, r - 1, col);
-    DrawEllipseLines((int)c.x, (int)c.y, r * 0.45f - 1, r - 2, col);
-    DrawRectangleRec((Rectangle){c.x - r, c.y - s * 0.03f, 2 * r, s * 0.06f}, col);
-    DrawRectangleRec((Rectangle){c.x - s * 0.03f, c.y - r, s * 0.06f, 2 * r}, col);
-}
-
 typedef struct {
     int pack;   /* pack survolé, -1 sinon */
     int action; /* 1 clé, 2 créer, 3 bascule en ligne / solo ; 0 sinon */
     float y;
 } sidebar_tip;
 
+static int rail_plus_hot; /* + du rail survolé (pour son info-bulle) */
+
+/* Rail des packs : les icônes de tous les packs (en ligne puis solo), le + en bas (nouveau pack solo, clé d'accès) */
 static void draw_sidebar(void) {
-    /* packs en ligne d'abord, puis les packs solo (ajoutés en fin de liste) */
+    Rectangle rail = {RAIL_X, RAIL_TOP, RAIL_W, RAIL_BOTTOM - RAIL_TOP};
+    glow(rail, 22, with_alpha((Color){0, 0, 0, 255}, 0.4f), 0, 20);
+    rrect(rail, 22, (Color){18, 16, 30, 222});
+    rrect_lines(rail, 22, 1, C_BORDER);
+
     int n_on = 0;
     while (n_on < U.packs.n && !U.packs.v[n_on].local) n_on++;
-    int solo = U.bubble_solo;
-    int from = solo ? n_on : 0, to = solo ? U.packs.n : n_on;
-
-    /* coins concentriques : rayon de la bulle = rayon des boutons + marge autour d'eux */
-    const float step = 62, size = 52, radius = 15, bw = 72, pad = (bw - 52) / 2, brad = 15 + pad;
-    const float head = 58; /* bascule en ligne / solo, en haut de la bulle */
-    float content = head + (to - from + 1) * step - (step - 52) + pad;
-    float avail = WIN_H - TITLE_H - 48;
-    /* hauteur animée : pas de saut quand on bascule entre deux listes de tailles différentes */
-    float bh = ui_anim("pk-bubble-h", fminf(content + pad, avail), 14);
-    Rectangle bubble = {(SIDEBAR_W - bw) / 2, TITLE_H + (WIN_H - TITLE_H - bh) / 2, bw, bh};
-    glow(bubble, brad, with_alpha((Color){0, 0, 0, 255}, 0.45f), 0, 22);
-    rrect(bubble, brad, (Color){16, 14, 26, 232});
-    rrect_lines(bubble, brad, 1, (Color){255, 255, 255, 28});
+    const float size = 52, step = 64, radius = 14, plus_h = 46;
+    float cx = rail.x + rail.width / 2;
+    Rectangle list = {rail.x, rail.y + 8, rail.width, rail.height - 8 - plus_h - 18};
+    int sep = n_on > 0 && n_on < U.packs.n;                       /* trait entre les packs en ligne et les packs solo */
+    float content = U.packs.n * step + (sep ? 14 : 0) + 8;
+    if (ui_mouse_in(list)) U.rail_scroll -= GetMouseWheelMove() * 40;
+    U.rail_scroll = fmaxf(0, fminf(U.rail_scroll, fmaxf(0, content - list.height)));
 
     sidebar_tip tip = {-1, 0, 0};
-
-    /* bascule : pastille avec l'icône et le nom de la liste affichée */
-    Rectangle tg = {bubble.x + pad, bubble.y + pad, size, 46};
-    int thot = ui_mouse_in(tg);
-    float th = ui_anim("pk-toggle", thot ? 1.0f : 0.0f, 16);
-    Color tc = solo ? (Color){88, 164, 255, 255} : C_BRAND;
-    rrect(tg, radius, with_alpha(tc, 0.12f + 0.1f * th));
-    rrect_lines(tg, radius, 1, with_alpha(tc, 0.35f + 0.3f * th));
-    if (solo) icon_user((Vector2){tg.x + size / 2, tg.y + 17}, 17, tc);
-    else icon_globe_fn((Vector2){tg.x + size / 2, tg.y + 17}, 18, tc);
-    const char *tl = solo ? "SOLO" : "EN LIGNE";
-    float tls = solo ? 10 : 9;
-    text_sp(F.black, tl, tg.x + (size - measure_sp(F.black, tl, tls, 0.4f).x) / 2, tg.y + 30, tls, 0.4f, tc);
-    if (thot) {
-        tip.action = 3;
-        tip.y = tg.y + tg.height / 2;
-        ui_hand();
-        if (ui_btn_released()) {
-            U.bubble_solo = !U.bubble_solo;
-            U.packs_scroll = 0;
-            U.bubble_t = ui_time;
-        }
-    }
-    DrawRectangle((int)(bubble.x + 14), (int)(tg.y + tg.height + 6), (int)(bw - 28), 1, (Color){255, 255, 255, 22});
-
-    /* liste (défilante sous la bascule), puis le bouton d'action : clé d'accès / nouveau pack solo */
-    Rectangle list = {bubble.x, bubble.y + head, bw, bh - head};
-    if (ui_mouse_in(list)) U.packs_scroll -= GetMouseWheelMove() * 40;
-    U.packs_scroll = fmaxf(0, fminf(U.packs_scroll, fmaxf(0, content + pad - bh)));
-    float slide = (1 - ui_ease_out((ui_time - U.bubble_t) * 5)) * 10; /* petite entrée après la bascule */
-    BeginScissorMode((int)list.x, (int)list.y + 2, (int)list.width, (int)list.height - 4);
-    for (int k = 0; k <= to - from; k++) {
-        int i = from + k, is_action = i == to;
-        Vector2 c = {bubble.x + bw / 2, list.y + pad + size / 2 + k * step - U.packs_scroll + slide};
+    BeginScissorMode((int)list.x, (int)list.y, (int)list.width, (int)list.height);
+    for (int i = 0; i < U.packs.n; i++) {
+        float y = list.y + 8 + size / 2 + i * step + (sep && i >= n_on ? 14 : 0) - U.rail_scroll;
+        if (sep && i == n_on) DrawRectangle((int)(rail.x + 18), (int)(y - size / 2 - 13), (int)(rail.width - 36), 1, C_BORDER);
+        Vector2 c = {cx, y};
         Rectangle hit = {c.x - size / 2, c.y - size / 2, size, size};
         char id[32];
-        snprintf(id, sizeof id, is_action ? "pk-act-%d" : "pk-%d", is_action ? solo : i);
+        snprintf(id, sizeof id, "pk-%d", i);
         int hot = ui_mouse_in(hit) && ui_mouse_in(list);
         float h = ui_anim(id, hot ? 1.0f : 0.0f, 16);
-        float sz = size + 2 * h; /* léger grossissement au survol */
+        float sz = size + 2 * h;
         Rectangle r = {c.x - sz / 2, c.y - sz / 2, sz, sz};
-        if (is_action) {
-            rrect(r, radius, with_alpha((Color){255, 255, 255, 255}, 0.04f + 0.06f * h));
-            rrect_lines(r, radius, 1, with_alpha((Color){255, 255, 255, 255}, 0.16f + 0.2f * h));
-            Color ic = mix(C_MUTED, C_ACCENT, h);
-            if (solo) icon_plus_fn(c, 20, ic);
-            else icon_key_fn(c, 26, ic);
-            if (hot) {
-                tip.action = solo ? 2 : 1;
-                tip.y = c.y;
-                ui_hand();
-                if (ui_btn_released()) {
-                    if (solo) open_solo_pack(0);
-                    else open_key_modal();
-                }
-            }
-            continue;
+        if (i == U.sel) {
+            glow(r, radius, with_alpha(C_ACCENT, 0.5f), 0, 14);
+            rrect_lines((Rectangle){r.x - 4, r.y - 4, r.width + 8, r.height + 8}, radius + 4, 2, C_ACCENT);
         }
         draw_pack_logo(i, r, radius);
-        if (i == U.sel) {
-            rrect_lines(r, radius, 2, C_ACCENT);
-        } else {
-            /* les autres packs sont un peu éteints, rallumés au survol */
-            rrect(r, radius, with_alpha(SIDEBAR_BG, 0.45f * (1 - h)));
-            if (h > 0.01f) rrect_lines(r, radius, 1, with_alpha((Color){255, 255, 255, 255}, 0.18f * h));
-        }
-        Vector2 b = {r.x + r.width - 4, r.y + r.height - 4};
+        if (i != U.sel) rrect(r, radius, with_alpha((Color){16, 14, 26, 255}, 0.4f * (1 - h))); /* les autres un peu éteints */
+        Vector2 b = {r.x + r.width - 3, r.y + r.height - 3};
         if (has_update(i)) {
-            /* pastille « mise à jour disponible » dans le coin, légère pulsation */
             float pulse = 1 + 0.08f * sinf(ui_time * 3 + i);
-            DrawCircleV(b, 12 * pulse, SIDEBAR_BG);
-            DrawCircleV(b, 9 * pulse, C_ACCENT);
-            icon_download(b, 11, WHITE);
+            DrawCircleV(b, 11 * pulse, (Color){18, 16, 30, 255});
+            DrawCircleV(b, 8.5f * pulse, C_ACCENT);
+            icon_download(b, 10, WHITE);
         } else if (U.packs.v[i].access_key[0]) {
-            /* pack privé : petite clé dans le coin */
-            DrawCircleV(b, 11, SIDEBAR_BG);
-            DrawCircleV(b, 8, (Color){120, 170, 255, 255});
-            icon_key_fn(b, 12, WHITE);
+            DrawCircleV(b, 10, (Color){18, 16, 30, 255});
+            DrawCircleV(b, 7.5f, (Color){120, 170, 255, 255});
+            icon_key_fn(b, 11, WHITE);
         }
         if (hot) {
             tip.pack = i;
@@ -1427,22 +1359,30 @@ static void draw_sidebar(void) {
         }
     }
     EndScissorMode();
-    if (!solo && U.packs_state == 0 && n_on == 0) spinner((Vector2){bubble.x + bw / 2, list.y + pad + 26}, 12, ui_time, C_ACCENT);
+    if (U.packs_state == 0 && U.packs.n == 0) spinner((Vector2){cx, list.y + 34}, 12, ui_time, C_ACCENT);
 
-    /* bulle d'info : nom + état du pack, ou rôle du bouton survolé */
+    /* + : nouveau pack solo ou clé d'accès (petit menu) */
+    DrawRectangle((int)(rail.x + 14), (int)(rail.y + rail.height - plus_h - 16), (int)(rail.width - 28), 1, C_BORDER);
+    Rectangle pr = {cx - size / 2, rail.y + rail.height - plus_h - 8, size, plus_h};
+    int phot = ui_mouse_in(pr);
+    float ph = ui_anim("rail-plus", phot || U.menu_open == 2 ? 1.0f : 0.0f, 16);
+    rrect(pr, radius, with_alpha(WHITE, 0.04f + 0.06f * ph));
+    rrect_lines(pr, radius, 1, with_alpha(WHITE, 0.14f + 0.2f * ph));
+    icon_plus_fn((Vector2){cx, pr.y + pr.height / 2}, 20, mix(C_MUTED, C_ACCENT, ph));
+    rail_plus_hot = phot;
+    if (phot) {
+        tip.action = 2;
+        tip.y = pr.y + pr.height / 2;
+        ui_hand();
+        if (ui_btn_released()) U.menu_open = U.menu_open == 2 ? 0 : 2;
+    }
+
     static sidebar_tip last = {-1, 0, 0};
-    int any = tip.pack >= 0 || tip.action;
+    int any = (tip.pack >= 0 || tip.action) && U.menu_open != 2;
     if (any) last = tip;
     float ta = ui_anim("pk-tip", any ? 1.0f : 0.0f, 18);
-    if (last.action == 1) {
-        draw_sidebar_tooltip(last.y, "Clé d'accès", "Débloquer un pack privé", C_MUTED, ta);
-    } else if (last.action == 2) {
-        draw_sidebar_tooltip(last.y, "Nouveau pack solo", "Ta version, tes mods", C_MUTED, ta);
-    } else if (last.action == 3) {
-        char sub[64];
-        snprintf(sub, sizeof sub, "%d pack%s", solo ? U.packs.n - n_on : n_on, (solo ? U.packs.n - n_on : n_on) > 1 ? "s" : "");
-        draw_sidebar_tooltip(last.y, solo ? "Packs solo  ·  voir les packs en ligne" : "Packs en ligne  ·  voir les packs solo", sub,
-                             C_MUTED, ta);
+    if (last.action == 2) {
+        draw_sidebar_tooltip(last.y, "Ajouter", "Nouveau pack solo ou clé d'accès", C_MUTED, ta);
     } else if (last.pack >= 0 && last.pack < U.packs.n) {
         const pack *p = &U.packs.v[last.pack];
         char sub[128], lbl[96];
@@ -1539,6 +1479,37 @@ static const char *loader_display(const char *l) {
     return strcmp(l, "neoforge") == 0 ? "NeoForge" : strcmp(l, "forge") == 0 ? "Forge" : strcmp(l, "fabric") == 0 ? "Fabric" : "Vanilla";
 }
 
+/* Texte centré sur cx, coupé en lignes de max_w au plus */
+static void text_wrap_center(Font f, const char *s, float cx, float y, float size, float max_w, float line_h, int max_lines, Color c) {
+    char line[512] = "";
+    int lines = 0;
+    const char *p = s;
+    while (*p && lines < max_lines) {
+        const char *e = p;
+        while (*e == ' ') e++;
+        const char *w = e;
+        while (*e && *e != ' ') e++;
+        char test[512];
+        snprintf(test, sizeof test, "%s%s%.*s", line, line[0] ? " " : "", (int)(e - w), w);
+        if (line[0] && measure(f, test, size).x > max_w) {
+            if (lines == max_lines - 1) {
+                snprintf(test, sizeof test, "%s…", line);
+                snprintf(line, sizeof line, "%s", test);
+                break;
+            }
+            text(f, line, cx - measure(f, line, size).x / 2, y + lines * line_h, size, c);
+            lines++;
+            snprintf(line, sizeof line, "%.*s", (int)(e - w), w);
+        } else {
+            snprintf(line, sizeof line, "%s", test);
+        }
+        p = e;
+    }
+    if (line[0] && lines < max_lines) text(f, line, cx - measure(f, line, size).x / 2, y + lines * line_h, size, c);
+}
+
+#define LOG_PW 392.0f
+
 /* Éléments de la page d'un pack, animés séparément lors d'un changement de pack */
 enum { EL_TITLE, EL_DESC, EL_CARDS, EL_BAR, EL_BG, EL_COUNT };
 
@@ -1551,28 +1522,46 @@ static void draw_pack_view(int idx, float oy, int interactive, const float dy[EL
         draw_cover(U.gfx[idx].banner, (Rectangle){0, TITLE_H + dy[EL_BG], WIN_W, WIN_H - TITLE_H}, with_alpha(WHITE, al[EL_BG]));
         DrawRectangle(0, (int)(TITLE_H + dy[EL_BG]), WIN_W, WIN_H - TITLE_H, with_alpha((Color){8, 8, 16, 60}, al[EL_BG]));
     }
-    float x = SIDEBAR_W + 60, y = 76 + oy;
+    /* zone centrale : entre le rail et le bord droit (ou le panneau des logs) */
+    float L = RAIL_X + RAIL_W + 20, R = WIN_W - 60 + (WIN_W - 24 - LOG_PW - 20 - (WIN_W - 60)) * log_k;
+    float cx = (L + R) / 2, y0 = TITLE_H + 108 + oy;
 
-    /* Titre (le « logo » du pack) : taille adaptée à la longueur du nom */
+    /* surtitre : loader + version, et une pastille (mise à jour, solo, privé) */
     if (al[EL_TITLE] > 0.001f) {
-        float size = 104, a = al[EL_TITLE], ty0 = y + dy[EL_TITLE];
-        float max_w = 720 - 150 * log_k; /* logs affichés : le titre laisse la place au panneau */
+        float a = al[EL_TITLE], yy = y0 + dy[EL_TITLE];
+        char over[96], lbl[64];
+        pack_loader_label(p, lbl, sizeof lbl);
+        snprintf(over, sizeof over, "%s  ·  %s", lbl, p->mc_version);
+        for (char *c = over; *c; c++)
+            if (*c >= 'a' && *c <= 'z') *c -= 32;
+        const char *badge = has_update(idx) ? "Mise à jour" : p->local ? "Pack solo" : p->access_key[0] ? "Privé" : NULL;
+        float ow = measure_sp(F.semibold, over, 11, 1.6f).x, bw = badge ? measure(F.semibold, badge, 11).x + 20 : 0;
+        float ox = cx - (ow + (badge ? bw + 10 : 0)) / 2;
+        text_sp(F.semibold, over, ox, yy + 3, 11, 1.6f, with_alpha((Color){200, 202, 220, 255}, a));
+        if (badge) {
+            Rectangle br = {ox + ow + 10, yy - 1, bw, 20};
+            pill_gradient(br, with_alpha(C_ACCENT, a), with_alpha(C_ACCENT2, a));
+            text_center(F.semibold, badge, br, 11, with_alpha(WHITE, a));
+        }
+
+        /* titre (le « logo » du pack) : taille adaptée à la place */
+        float size = 96, max_w = R - L - 20;
         while (size > 40 && measure_sp(F.black, p->name, size, size * 0.05f).x > max_w) size -= 4;
-        float ty = ty0 + 40 + (104 - size) * 0.6f;
-        text_sp(F.black, p->name, x + 2, ty + 6, size, size * 0.05f, with_alpha(BLACK, 0.45f * a));
-        text_sp(F.black, p->name, x, ty, size, size * 0.05f, with_alpha(C_TEXT, a));
-        pill_gradient((Rectangle){x + 4, ty0 + 40 + 124, 110, 6}, with_alpha(C_ACCENT, a), with_alpha(C_ACCENT2, a));
+        float tw = measure_sp(F.black, p->name, size, size * 0.05f).x, ty = yy + 26 + (96 - size) * 0.5f;
+        text_sp(F.black, p->name, cx - tw / 2 + 3, ty + 6, size, size * 0.05f, with_alpha(BLACK, 0.45f * a));
+        text_sp(F.black, p->name, cx - tw / 2, ty, size, size * 0.05f, with_alpha(C_TEXT, a));
+        pill_gradient((Rectangle){cx - 55, yy + 26 + 96 + 16, 110, 6}, with_alpha(C_ACCENT, a), with_alpha(C_ACCENT2, a));
     }
     if (al[EL_DESC] > 0.001f) {
         char solo[200];
         snprintf(solo, sizeof solo, "Pack solo %s %s. Ajoute tes mods dans « Mods », puis clique sur Jouer.", loader_display(p->loader),
                  p->mc_version);
         const char *desc = p->description[0] ? p->description : p->local ? solo : "Clique sur Jouer : tout s'installe automatiquement.";
-        text_wrap(F.regular, desc, x, y + 40 + 124 + 26 + dy[EL_DESC], 16, 640 - 90 * log_k, 24, 3,
-                  with_alpha((Color){200, 202, 220, 255}, al[EL_DESC]));
+        text_wrap_center(F.regular, desc, cx, y0 + 26 + 96 + 42 + dy[EL_DESC], 16, fminf(580, R - L - 40), 24, 3,
+                         with_alpha((Color){200, 202, 220, 255}, al[EL_DESC]));
     }
 
-    /* Cartes */
+    /* cartes, centrées au-dessus de la rangée du bas */
     if (al[EL_CARDS] > 0.001f) {
         char mods[32], ram[32], srv[64];
         snprintf(mods, sizeof mods, "%d", p->local && idx == U.sel ? U.nmods : pack_count_kind(p, "mod"));
@@ -1591,15 +1580,14 @@ static void draw_pack_view(int idx, float oy, int interactive, const float dy[EL
             snprintf(srv, sizeof srv, "Hors ligne");
             sc = C_ERR;
         }
-        float cy = WIN_H - 244 + oy + dy[EL_CARDS];
+        float gap = 14 - 4 * log_k, cw = fminf(204, (R - L - 20 - 2 * gap) / 3);
+        float x = cx - (3 * cw + 2 * gap) / 2, cy = ROW_Y - 124 + oy + dy[EL_CARDS];
         card_alpha = al[EL_CARDS];
-        float cw = 214 - 32 * log_k, gap = 16 - 6 * log_k; /* resserrées quand le panneau des logs est ouvert */
         draw_stat_card("card-mods", (Rectangle){x, cy, cw, 88}, card_icon_mods, "Mods", mods, C_TEXT, PAGE_MODS, 1);
         draw_stat_card("card-ram", (Rectangle){x + cw + gap, cy, cw, 88}, card_icon_ram, log_k > 0.5f ? "Mémoire" : "Mémoire allouée", ram,
                        C_TEXT, PAGE_SETTINGS, 1);
         Rectangle srv_r = {x + 2 * (cw + gap), cy, cw, 88};
         int online = p->server_address[0] && get_ping(p->slug, &st) && st.online;
-        /* serveur en ligne : la carte ouvre la liste des joueurs (le libellé l'annonce au survol) */
         const char *srv_label = !p->server_address[0] ? "Serveur"
                                 : online && ui_mouse_in(srv_r) ? "Voir les joueurs"
                                 : log_k > 0.5f                 ? "Joueurs"
@@ -1621,51 +1609,27 @@ static const float SW_TOTAL = 2 * (EL_COUNT - 1) * SW_STAGGER + SW_OUT + SW_IN;
 
 static float clamp01(float v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 
-/* Barre du bas d'un pack (compte, infos du pack, Mods / Réglages / Dossier, Jouer) */
+/* Petite flèche vers le bas (menu) */
+static void icon_chevron_down(Vector2 c, float s, Color col) {
+    DrawLineEx((Vector2){c.x - s * 0.3f, c.y - s * 0.12f}, (Vector2){c.x, c.y + s * 0.18f}, 2.2f, col);
+    DrawLineEx((Vector2){c.x, c.y + s * 0.18f}, (Vector2){c.x + s * 0.3f, c.y - s * 0.12f}, 2.2f, col);
+}
+
+#define PLAY_W 330.0f
+#define PLAY_MENU_W 64.0f
+static Rectangle play_rect(void) { return (Rectangle){WIN_W - 24 - PLAY_W, ROW_Y, PLAY_W, ROW_H}; }
+
+/* Rangée du bas d'un pack : barre d'infos (ou progression) et bouton Jouer ▾ */
 static void draw_bar_content(const snapshot *s, int idx) {
     const pack *p = &U.packs.v[idx];
-    Rectangle bar = {SIDEBAR_W + 32, WIN_H - 112, WIN_W - SIDEBAR_W - 64, 84};
-    rrect(bar, 22, (Color){18, 16, 30, 225});
+    Rectangle play = play_rect();
+    Rectangle bar = {226, ROW_Y, play.x - 12 - 226, ROW_H};
+    rrect(bar, 22, (Color){18, 16, 30, 222});
     rrect_lines(bar, 22, 1, C_BORDER);
 
     int logged = s->name[0] != '\0';
     int busy = s->task != TASK_IDLE;
-
-    /* Compte : cliquer dessus pour en changer */
-    Rectangle acc = {bar.x + 8, bar.y + 8, 226, 68};
-    int acc_hot = !busy && ui_mouse_in(acc);
-    float ah = ui_anim("bar-acc", acc_hot ? 1.0f : 0.0f, 14);
-    if (ah > 0.01f) rrect(acc, 16, with_alpha(C_PANEL_HI, ah));
-    draw_head((Rectangle){bar.x + 18, bar.y + 18, 48, 48}, logged);
-    text_fit(F.bold, logged ? s->name : "Non connecté", bar.x + 80, bar.y + 20, 18, 146, C_TEXT);
-    if (acc_hot) {
-        text(F.semibold, logged ? "Changer de compte" : "Se connecter", bar.x + 80, bar.y + 45, 13, C_ACCENT);
-    } else if (logged) {
-        DrawCircleV((Vector2){bar.x + 85, bar.y + 54}, 4, C_OK);
-        text(F.medium, "Compte Microsoft", bar.x + 95, bar.y + 45, 13, C_MUTED);
-    } else {
-        text(F.medium, "Compte officiel requis", bar.x + 80, bar.y + 45, 13, C_MUTED);
-    }
-    if (acc_hot) ui_hand();
-    if (acc_hot && ui_btn_released()) begin_login();
-
-    /* Mods / Réglages / Dossier, juste avant le bouton Jouer */
-    float play_w = 214;
-    int nb = p->local ? 4 : 3; /* pack solo : bouton « Modifier » en plus */
-    float nx = bar.x + bar.width - 18 - play_w - 16 - (nb * 48 + (nb - 1) * 8);
-    DrawRectangle((int)nx - 16, (int)bar.y + 20, 1, 44, C_BORDER);
-    if (bar_icon_button("bar-mods", (Rectangle){nx, bar.y + 18, 48, 48}, icon_mods_fn, "Mods du pack", 1)) set_page(PAGE_MODS);
-    if (bar_icon_button("bar-set", (Rectangle){nx + 56, bar.y + 18, 48, 48}, icon_gear_fn, "Réglages", 1)) set_page(PAGE_SETTINGS);
-    if (bar_icon_button("bar-dir", (Rectangle){nx + 112, bar.y + 18, 48, 48}, icon_folder_fn, "Dossier du pack", 1)) {
-        char *dir = pack_instance_dir(p);
-        open_path(dir);
-        free(dir);
-    }
-    if (p->local && bar_icon_button("bar-edit", (Rectangle){nx + 168, bar.y + 18, 48, 48}, icon_pencil_fn, "Modifier le pack", !busy))
-        open_solo_pack(1);
-
-    float px = bar.x + 262, pw = nx - 32 - px;
-    DrawRectangle((int)px - 14, (int)bar.y + 20, 1, 44, C_BORDER);
+    float px = bar.x + 22, pw = bar.width - 44;
     if ((s->task == TASK_PLAY || s->task == TASK_IMPORT) && !s->game_running) {
         float target = s->ptotal ? (float)s->pdone / (float)s->ptotal : 0;
         U.progress_smooth += (target - U.progress_smooth) * fminf(1, GetFrameTime() * 10);
@@ -1673,8 +1637,8 @@ static void draw_bar_content(const snapshot *s, int idx) {
         char line[256];
         if (s->ptotal) snprintf(line, sizeof line, "%s — %zu / %zu", s->plabel, s->pdone, s->ptotal);
         else snprintf(line, sizeof line, "%s", s->status[0] ? s->status : "Préparation…");
-        text_fit(F.semibold, line, px, bar.y + 20, 14, pw, C_TEXT);
-        Rectangle track = {px, bar.y + 50, pw, 8};
+        text_fit(F.semibold, line, px, bar.y + 15, 14, pw, C_TEXT);
+        Rectangle track = {px, bar.y + 42, pw, 8};
         rrect(track, 4, (Color){255, 255, 255, 18});
         if (s->ptotal) {
             if (U.progress_smooth > 0.01f) pill_gradient((Rectangle){px, track.y, fmaxf(8, pw * U.progress_smooth), 8}, C_ACCENT, C_ACCENT2);
@@ -1684,23 +1648,25 @@ static void draw_bar_content(const snapshot *s, int idx) {
             if (b > a + 8) pill_gradient((Rectangle){a, track.y, b - a, 8}, C_ACCENT, C_ACCENT2);
         }
     } else if (s->game_running) {
-        text(F.semibold, "Minecraft est lancé", px, bar.y + 22, 15, C_TEXT);
-        text(F.regular, "Bon jeu ! Le launcher revient quand tu fermes le jeu.", px, bar.y + 44, 13, C_MUTED);
+        text(F.semibold, "Minecraft est lancé", px, bar.y + 15, 15, C_TEXT);
+        text(F.regular, "Bon jeu ! Les logs s'affichent à droite.", px, bar.y + 37, 13, C_MUTED);
     } else {
-        /* infos du pack : modloader, version du jeu, version du modloader */
+        /* infos du pack : modloader, version du jeu, version du modloader, état */
         int vanilla = strcmp(p->loader, "vanilla") == 0;
-        const char *labels[] = {"MODLOADER", "MINECRAFT", "VERSION"};
-        const char *values[] = {loader_display(p->loader), p->mc_version, p->loader_version};
-        int n = vanilla ? 2 : 3;
-        float cw = pw / 3;
-        for (int i = 0; i < n; i++) {
+        const char *state = p->local ? "Pack solo" : has_update(idx) ? "Mise à jour" : idx < MAX_PACKS && U.installed_rev[idx] >= 0 ? "À jour" : "À installer";
+        Color stc = p->local ? (Color){110, 182, 255, 255} : has_update(idx) ? C_ACCENT : idx < MAX_PACKS && U.installed_rev[idx] >= 0 ? C_OK : C_MUTED;
+        const char *labels[] = {"MODLOADER", "MINECRAFT", "VERSION", "ÉTAT"};
+        const char *values[] = {loader_display(p->loader), p->mc_version, vanilla ? "—" : p->loader_version, state};
+        float cw = pw / 4;
+        for (int i = 0; i < 4; i++) {
             float cx = px + i * cw;
-            text_sp(F.semibold, labels[i], cx, bar.y + 22, 10, 1.4f, C_DIM);
-            text_fit(F.bold, values[i], cx, bar.y + 38, 17, cw - 12, i == 0 ? mix(C_ACCENT_HI, WHITE, 0.35f) : C_TEXT);
+            text_sp(F.semibold, labels[i], cx, bar.y + 15, 10, 1.4f, C_DIM);
+            Color vc = i == 0 ? mix(C_ACCENT_HI, WHITE, 0.35f) : i == 3 ? stc : C_TEXT;
+            text_fit(F.bold, values[i], cx, bar.y + 32, 15, cw - 10, vc);
         }
     }
 
-    Rectangle play = {bar.x + bar.width - 18 - play_w, bar.y + 14, play_w, 56};
+    /* Jouer ▾ : action à gauche, menu à droite du trait */
     const char *label;
     if (s->game_running) label = "EN JEU";
     else if (s->task == TASK_PLAY) label = s->no_launch ? "MISE À JOUR…" : "LANCEMENT…";
@@ -1708,24 +1674,56 @@ static void draw_bar_content(const snapshot *s, int idx) {
     else if (s->task == TASK_IMPORT) label = "IMPORT…";
     else if (!logged) label = "SE CONNECTER";
     else label = has_update(idx) ? "METTRE À JOUR" : "JOUER";
-
-    if ((s->task == TASK_PLAY || s->task == TASK_IMPORT) && !s->game_running) {
+    Rectangle main_r = {play.x, play.y, play.width - PLAY_MENU_W, play.height};
+    Rectangle menu_r = {play.x + play.width - PLAY_MENU_W, play.y, PLAY_MENU_W, play.height};
+    int working = (s->task == TASK_PLAY || s->task == TASK_IMPORT) && !s->game_running;
+    if (working) {
         pill_gradient(play, (Color){70, 60, 80, 255}, (Color){60, 52, 74, 255});
-        spinner((Vector2){play.x + 40, play.y + 28}, 11, ui_time, WHITE);
-        text_center(F.bold, label, (Rectangle){play.x + 20, play.y, play.width - 20, play.height}, 17, C_TEXT);
+        spinner((Vector2){main_r.x + 36, main_r.y + main_r.height / 2}, 11, ui_time, WHITE);
+        text_center(F.bold, label, (Rectangle){main_r.x + 24, main_r.y, main_r.width - 24, main_r.height}, 17, C_TEXT);
     } else if (s->game_running) {
         pill_gradient(play, (Color){30, 90, 64, 255}, (Color){24, 76, 70, 255});
         float pulse = 0.5f + 0.5f * sinf(ui_time * 4);
-        DrawCircleV((Vector2){play.x + 44, play.y + 28}, 5 + pulse, C_OK);
-        text_center(F.bold, label, play, 17, C_TEXT);
+        DrawCircleV((Vector2){main_r.x + 52, main_r.y + main_r.height / 2}, 5 + pulse, C_OK);
+        text_center(F.bold, label, main_r, 17, C_TEXT);
     } else {
         float pulse = 0.5f + 0.5f * sinf(ui_time * 2.2f);
-        if (!busy) glow(play, 28, with_alpha(C_ACCENT2, 0.6f), 0, 20 + 10 * pulse);
-        int upd = logged && has_update(idx);
-        if (ui_button("btn-play", play, label, !logged ? NULL : upd ? icon_download : icon_play, BTN_PRIMARY, !busy)) {
-            if (!logged) begin_login();
-            else if (start_task(TASK_PLAY, upd) == 0) U.progress_smooth = 0;
+        if (!busy) glow(play, play.height / 2, with_alpha(C_ACCENT2, 0.6f), 0, 20 + 10 * pulse);
+        pill_gradient(play, C_ACCENT, C_ACCENT2);
+        int mhot = !busy && ui_mouse_in(main_r);
+        float mh = ui_anim("play-main", mhot ? 1.0f : 0.0f, 14);
+        if (mh > 0.01f) {
+            BeginScissorMode((int)main_r.x, (int)main_r.y, (int)main_r.width, (int)main_r.height);
+            rrect(play, play.height / 2, with_alpha(WHITE, 0.12f * mh));
+            EndScissorMode();
         }
+        int upd = logged && has_update(idx);
+        icon_fn ic = !logged ? NULL : upd ? icon_download : icon_play;
+        Vector2 m = measure(F.bold, label, 17);
+        float lx = main_r.x + (main_r.width - m.x - (ic ? 30 : 0)) / 2;
+        if (ic) ic((Vector2){lx + 10, main_r.y + main_r.height / 2}, 18, WHITE);
+        text(F.bold, label, lx + (ic ? 30 : 0), main_r.y + (main_r.height - m.y) / 2, 17, WHITE);
+        if (mhot) {
+            ui_hand();
+            if (ui_btn_released()) {
+                if (!logged) begin_login();
+                else if (start_task(TASK_PLAY, upd) == 0) U.progress_smooth = 0;
+            }
+        }
+    }
+    /* menu ▾ (toujours utilisable : Mods, Réglages, Dossier…) */
+    int chot = ui_mouse_in(menu_r);
+    float ch = ui_anim("play-menu", chot || U.menu_open == 1 ? 1.0f : 0.0f, 14);
+    if (ch > 0.01f) {
+        BeginScissorMode((int)menu_r.x, (int)menu_r.y, (int)menu_r.width, (int)menu_r.height);
+        rrect(play, play.height / 2, with_alpha(WHITE, 0.12f * ch));
+        EndScissorMode();
+    }
+    DrawRectangle((int)menu_r.x, (int)(play.y + 16), 1, (int)(play.height - 32), (Color){255, 255, 255, 90});
+    icon_chevron_down((Vector2){menu_r.x + menu_r.width / 2 - 3, menu_r.y + menu_r.height / 2}, 18, WHITE);
+    if (chot) {
+        ui_hand();
+        if (ui_btn_released()) U.menu_open = U.menu_open == 1 ? 0 : 1;
     }
 }
 
@@ -1865,8 +1863,6 @@ static void open_logs_dir(const game_session *gs) {
     open_path(dir);
     free(dir);
 }
-
-#define LOG_PW 392.0f
 
 static void draw_log_panel(float k) {
     if (k <= 0.001f) return;
@@ -2061,6 +2057,333 @@ static void draw_crash_modal(float appear) {
         text_fit(F.medium, "Envoi indisponible dans cette version : copie les logs.", card.x + w - 32 - 300, by - 22, 12, 300, C_DIM);
 }
 
+/* ---------- accueil : profil, bulle Bibliothèque, actus, menus, panneau Bibliothèque ---------- */
+
+static int contains_ci(const char *hay, const char *needle);
+static void open_import(void);
+
+/* Info-bulle au-dessus (ou à gauche) d'un élément survolé */
+static void hint_above(const char *id, Rectangle anchor, const char *msg, int left) {
+    float a = ui_anim(id, ui_mouse_in(anchor) ? 1.0f : 0.0f, 16);
+    if (a <= 0.01f) return;
+    Vector2 m = measure(F.semibold, msg, 12);
+    Rectangle t = left ? (Rectangle){anchor.x - m.x - 34 + 4 * (1 - a), anchor.y + anchor.height / 2 - 13, m.x + 20, 26}
+                       : (Rectangle){anchor.x + anchor.width / 2 - m.x / 2 - 10, anchor.y - 34 + 4 * (1 - a), m.x + 20, 26};
+    rrect(t, 8, (Color){24, 21, 38, (unsigned char)(245 * a)});
+    rrect_lines(t, 8, 1, with_alpha(C_BORDER, a));
+    text(F.semibold, msg, t.x + 10, t.y + 6, 12, with_alpha(C_TEXT, a));
+}
+
+/* Trait qui barre un texte ou une icône (fonction pas encore disponible) */
+static void strike(float x0, float y0, float x1, float y1, Color c) { DrawLineEx((Vector2){x0, y0}, (Vector2){x1, y1}, 1.6f, c); }
+
+static void icon_grid_fn(Vector2 c, float s, Color col) {
+    float k = s * 0.2f, g = s * 0.06f;
+    rrect((Rectangle){c.x - k * 2 - g, c.y - k * 2 - g, k * 2, k * 2}, 2, col);
+    rrect((Rectangle){c.x + g, c.y - k * 2 - g, k * 2, k * 2}, 2, with_alpha(col, 0.6f));
+    rrect((Rectangle){c.x - k * 2 - g, c.y + g, k * 2, k * 2}, 2, with_alpha(col, 0.6f));
+    rrect((Rectangle){c.x + g, c.y + g, k * 2, k * 2}, 2, col);
+}
+
+/* Sac (boutique) */
+static void icon_bag_fn(Vector2 c, float s, Color col) {
+    float top = c.y - s * 0.12f, bot = c.y + s * 0.4f, wt = s * 0.3f, wb = s * 0.36f;
+    DrawLineEx((Vector2){c.x - wt, top}, (Vector2){c.x + wt, top}, 2, col);
+    DrawLineEx((Vector2){c.x + wt, top}, (Vector2){c.x + wb, bot}, 2, col);
+    DrawLineEx((Vector2){c.x + wb, bot}, (Vector2){c.x - wb, bot}, 2, col);
+    DrawLineEx((Vector2){c.x - wb, bot}, (Vector2){c.x - wt, top}, 2, col);
+    DrawRing((Vector2){c.x, top}, s * 0.15f, s * 0.15f + 2, 180, 360, 24, col); /* anse */
+}
+
+/* Profil (haut gauche) : avatar rond qui déborde de la pilule, pseudo, compte ; amis (bientôt) */
+static void draw_profile(const snapshot *s) {
+    int logged = s->name[0] != '\0';
+    int busy = s->task != TASK_IDLE;
+    Vector2 av = {RAIL_X + 38, TITLE_H + 42};
+    Rectangle pill = {RAIL_X + 12, TITLE_H + 16, 0, 52};
+    const char *name = logged ? s->name : "Non connecté";
+    const char *sub = logged ? "Compte Microsoft" : "Se connecter";
+    float tw = fmaxf(measure(F.bold, name, 15).x, measure(F.medium, sub, 12).x);
+    float friends_x = pill.x + 74 + tw + 22;
+    pill.width = friends_x + 150 - pill.x;
+    Rectangle acc = {pill.x, pill.y, friends_x - 10 - pill.x, pill.height};
+    int hot = !busy && ui_mouse_in(acc);
+    float h = ui_anim("profile", hot ? 1.0f : 0.0f, 14);
+    glow(pill, 22, with_alpha((Color){0, 0, 0, 255}, 0.35f), 0, 16);
+    rrect(pill, 22, mix((Color){18, 16, 30, 246}, (Color){26, 22, 40, 250}, h));
+    rrect_lines(pill, 22, 1, mix(C_BORDER, with_alpha(C_ACCENT, 0.5f), h));
+
+    /* avatar : anneau en dégradé, tête du skin au centre */
+    glow((Rectangle){av.x - 34, av.y - 34, 68, 68}, 34, with_alpha(C_ACCENT, 0.4f), 0, 14);
+    DrawCircleV(av, 37, C_BG);
+    DrawCircleGradient((int)av.x, (int)av.y, 33, C_ACCENT_HI, C_ACCENT2);
+    Rectangle head = {av.x - 20, av.y - 20, 40, 40};
+    if (U.has_head && logged) {
+        DrawTexturePro(U.head, (Rectangle){0, 0, 8, 8}, head, (Vector2){0, 0}, 0, WHITE);
+        rrect_lines(head, 4, 1, (Color){0, 0, 0, 60});
+    } else {
+        icon_user(av, 30, WHITE);
+    }
+    DrawCircleV((Vector2){av.x + 24, av.y + 24}, 9, C_BG);
+    DrawCircleV((Vector2){av.x + 24, av.y + 24}, 6, logged ? C_OK : C_DIM);
+
+    text_fit(F.bold, name, pill.x + 74, pill.y + 9, 15, tw + 4, C_TEXT);
+    if (hot) text(F.semibold, logged ? "Changer de compte" : "Se connecter", pill.x + 74, pill.y + 29, 12, C_ACCENT);
+    else {
+        if (logged) DrawCircleV((Vector2){pill.x + 78, pill.y + 37}, 3.5f, C_OK);
+        text(F.medium, sub, pill.x + (logged ? 86 : 74), pill.y + 29, 12, logged ? C_OK : C_MUTED);
+    }
+    if (hot) {
+        ui_hand();
+        if (ui_btn_released()) begin_login();
+    }
+
+    /* amis : pas encore disponibles (barré) */
+    DrawRectangle((int)friends_x - 10, (int)pill.y + 12, 1, (int)pill.height - 24, C_BORDER);
+    Rectangle fr = {friends_x, pill.y, 140, pill.height};
+    for (int i = 0; i < 3; i++) {
+        Vector2 c = {fr.x + 14 + i * 18, pill.y + pill.height / 2};
+        DrawCircleV(c, 13, (Color){18, 16, 30, 255});
+        DrawCircleV(c, 11, (Color){60, 60, 78, 255});
+    }
+    float fx = fr.x + 70;
+    text(F.semibold, "Amis", fx, pill.y + 9, 13, C_DIM);
+    strike(fx - 2, pill.y + 18, fx + measure(F.semibold, "Amis", 13).x + 2, pill.y + 18, C_DIM);
+    text(F.medium, "Bientôt", fx, pill.y + 28, 11, with_alpha(C_DIM, 0.8f));
+    hint_above("hint-friends", fr, "Les amis arrivent bientôt", 0);
+}
+
+/* Bulle du bas à gauche : Bibliothèque | boutique (bientôt, barrée) */
+static void draw_lib_split(void) {
+    Rectangle r = {-22, ROW_Y, 236, ROW_H};
+    Rectangle main_r = {r.x, r.y, r.width - 58, r.height}, shop = {r.x + r.width - 58, r.y, 58, r.height};
+    rrect(r, 22, (Color){18, 16, 30, 222});
+    rrect_lines(r, 22, 1, C_BORDER);
+    int hot = ui_mouse_in(main_r);
+    float h = ui_anim("lib-main", hot || U.lib_open ? 1.0f : 0.0f, 14);
+    if (h > 0.01f) {
+        BeginScissorMode((int)fmaxf(0, main_r.x), (int)main_r.y, (int)main_r.width, (int)main_r.height);
+        rrect(r, 22, with_alpha(WHITE, 0.06f * h));
+        EndScissorMode();
+    }
+    Rectangle ib = {38, r.y + (r.height - 36) / 2, 36, 36};
+    if (U.lib_open) pill_gradient(ib, C_ACCENT, C_ACCENT2);
+    else rrect(ib, 12, with_alpha(C_ACCENT, 0.14f + 0.08f * h));
+    icon_grid_fn((Vector2){ib.x + 18, ib.y + 18}, 18, U.lib_open ? WHITE : C_ACCENT);
+    text(F.semibold, "Bibliothèque", ib.x + 48, r.y + (r.height - 18) / 2, 15, C_TEXT);
+    if (hot) {
+        ui_hand();
+        if (ui_btn_released()) U.lib_open = !U.lib_open;
+    }
+    DrawRectangle((int)shop.x, (int)(r.y + 16), 1, (int)(r.height - 32), C_BORDER);
+    Vector2 sc = {shop.x + shop.width / 2, shop.y + shop.height / 2};
+    icon_bag_fn(sc, 22, with_alpha(C_MUTED, 0.45f));
+    strike(sc.x - 12, sc.y + 10, sc.x + 12, sc.y - 10, with_alpha(C_MUTED, 0.7f));
+    hint_above("hint-shop", shop, "Boutique : bientôt", 0);
+}
+
+/* Actus (bord droit) : pas encore disponibles, seule la languette grisée et barrée */
+static void draw_news_tab(float alpha) {
+    if (alpha <= 0.01f) return;
+    Rectangle t = {WIN_W - 34, TITLE_H + 150, 60, 132};
+    rrect(t, 14, with_alpha((Color){18, 16, 30, 222}, alpha));
+    rrect_lines(t, 14, 1, with_alpha(C_BORDER, alpha));
+    Color c = with_alpha(C_DIM, alpha), tc = with_alpha(C_MUTED, 0.75f * alpha);
+    DrawLineEx((Vector2){t.x + 19, t.y + 14}, (Vector2){t.x + 14, t.y + 19}, 2, c);
+    DrawLineEx((Vector2){t.x + 14, t.y + 19}, (Vector2){t.x + 19, t.y + 24}, 2, c);
+    /* « ACTUS » à la verticale (de bas en haut) */
+    Vector2 m = measure_sp(F.bold, "ACTUS", 11, 2);
+    Vector2 o = {t.x + 17 - m.y / 2, t.y + 40 + m.x};
+    DrawTextPro(F.bold, "ACTUS", o, (Vector2){0, 0}, -90, 11, 2, tc);
+    strike(t.x + 17, t.y + 36, t.x + 17, t.y + 44 + m.x, with_alpha(C_MUTED, 0.6f * alpha));
+    DrawCircleV((Vector2){t.x + 17, t.y + 112}, 3, c);
+    hint_above("hint-news", (Rectangle){t.x, t.y, 34, t.height}, "Actus : bientôt", 1);
+}
+
+/* Menus : Jouer ▾ (au-dessus du bouton) et + du rail (à sa droite) */
+typedef struct {
+    const char *title, *sub;
+    int enabled;
+} menu_item;
+
+static int draw_menu(const char *id, Rectangle anchor, int above, const menu_item *items, int n, float appear) {
+    float w = 290, ih = 52, h = n * ih + 12;
+    Rectangle m = above ? (Rectangle){anchor.x + anchor.width - w, anchor.y - h - 12, w, h}
+                        : (Rectangle){anchor.x + anchor.width + 14, anchor.y + anchor.height - h, w, h};
+    float e = ui_ease_out(appear);
+    m.y += (1 - e) * (above ? 10 : 0);
+    m.x -= (1 - e) * (above ? 0 : 8);
+    glow(m, 20, with_alpha((Color){0, 0, 0, 255}, 0.5f * appear), 0, 24);
+    rrect(m, 20, with_alpha((Color){20, 18, 32, 252}, appear));
+    rrect_lines(m, 20, 1, with_alpha(C_BORDER, appear));
+    int chosen = -1;
+    for (int i = 0; i < n; i++) {
+        Rectangle r = {m.x + 6, m.y + 6 + i * ih, m.width - 12, ih};
+        char hid[48];
+        snprintf(hid, sizeof hid, "%s-%d", id, i);
+        int hot = items[i].enabled && ui_mouse_in(r);
+        float h2 = ui_anim(hid, hot ? 1.0f : 0.0f, 18);
+        if (h2 > 0.01f) rrect(r, 12, with_alpha(WHITE, 0.07f * h2 * appear));
+        Color tc = items[i].enabled ? C_TEXT : C_DIM;
+        text(F.semibold, items[i].title, r.x + 14, r.y + 8, 14, with_alpha(tc, appear));
+        if (items[i].sub) text_fit(F.regular, items[i].sub, r.x + 14, r.y + 28, 11.5f, r.width - 28, with_alpha(C_DIM, appear));
+        if (hot) {
+            ui_hand();
+            if (ui_btn_released()) chosen = i;
+        }
+    }
+    /* clic ailleurs : fermeture */
+    if (ui_btn_released() && !CheckCollisionPointRec(ui_mouse_pos(), m) && !CheckCollisionPointRec(ui_mouse_pos(), anchor)) chosen = -2;
+    return chosen;
+}
+
+static void draw_menus(const snapshot *s) {
+    static int last = 0;
+    if (U.menu_open) last = U.menu_open;
+    float a1 = ui_anim("menu-play", U.menu_open == 1 ? 1.0f : 0.0f, 16), a2 = ui_anim("menu-plus", U.menu_open == 2 ? 1.0f : 0.0f, 16);
+    int busy = s->task != TASK_IDLE || s->game_running;
+    if (last == 1 && a1 > 0.01f) {
+        const pack *p = current_pack();
+        if (!p) {
+            U.menu_open = 0;
+            return;
+        }
+        server_status st;
+        int online = p->server_address[0] && get_ping(p->slug, &st) && st.online;
+        char mods_sub[64];
+        snprintf(mods_sub, sizeof mods_sub, "%d mods · ajoute aussi les tiens", p->local ? U.nmods : pack_count_kind(p, "mod"));
+        menu_item items[6];
+        int act[6], n = 0;
+        items[n] = (menu_item){"Mods du pack", mods_sub, 1}, act[n++] = 0;
+        items[n] = (menu_item){"Réglages", "Mémoire, options de jeu, compte", 1}, act[n++] = 1;
+        items[n] = (menu_item){"Dossier du pack", "Mondes, captures, configs", 1}, act[n++] = 2;
+        if (p->local) items[n] = (menu_item){"Modifier le pack", "Nom, version, loader, mods, fond", !busy}, act[n++] = 3;
+        if (online) items[n] = (menu_item){"Joueurs en ligne", "Qui est sur le serveur", 1}, act[n++] = 4;
+        items[n] = (menu_item){"Importer depuis un autre launcher", "Touches, mondes, données des mods", !busy}, act[n++] = 5;
+        if (U.menu_open != 1) a1 = fminf(a1, 0.99f);
+        int c = draw_menu("menu-play", play_rect(), 1, items, n, a1);
+        if (U.menu_open == 1 && c != -1) {
+            U.menu_open = 0;
+            if (c >= 0) {
+                switch (act[c]) {
+                case 0: set_page(PAGE_MODS); break;
+                case 1: set_page(PAGE_SETTINGS); break;
+                case 2: {
+                    char *dir = pack_instance_dir(p);
+                    open_path(dir);
+                    free(dir);
+                } break;
+                case 3: open_solo_pack(1); break;
+                case 4: open_players(U.sel); break;
+                case 5: set_page(PAGE_SETTINGS), open_import(); break;
+                }
+            }
+        }
+    } else if (last == 2 && a2 > 0.01f) {
+        menu_item items[2] = {{"Nouveau pack solo", "Ta version de Minecraft, ton loader, tes mods", 1},
+                              {"Clé d'accès", "Débloquer un pack privé", 1}};
+        Rectangle anchor = {RAIL_X, RAIL_BOTTOM - 62, RAIL_W, 54};
+        int c = draw_menu("menu-plus", anchor, 0, items, 2, a2);
+        if (U.menu_open == 2 && c != -1) {
+            U.menu_open = 0;
+            if (c == 0) open_solo_pack(0);
+            else if (c == 1) open_key_modal();
+        }
+    }
+}
+
+/* Panneau Bibliothèque : tous les packs, recherche, filtres */
+static void draw_library_sheet(float appear) {
+    DrawRectangle(0, 0, WIN_W, WIN_H, with_alpha((Color){4, 4, 10, 255}, 0.35f * appear));
+    float x = RAIL_X + RAIL_W + 16, y = RAIL_TOP;
+    Rectangle sh = {x, y + (1 - ui_ease_out(appear)) * 30, WIN_W - x - 24, RAIL_BOTTOM - y};
+    glow(sh, 26, with_alpha((Color){0, 0, 0, 255}, 0.5f * appear), 0, 30);
+    rrect(sh, 26, with_alpha((Color){16, 14, 26, 245}, appear));
+    rrect_lines(sh, 26, 1, with_alpha(C_BORDER, appear));
+    if (appear < 0.99f && !U.lib_open) return;
+
+    int n_on = 0, n_inst = 0;
+    for (int i = 0; i < U.packs.n; i++) {
+        if (!U.packs.v[i].local) n_on++;
+        if (U.packs.v[i].local || (i < MAX_PACKS && U.installed_rev[i] >= 0)) n_inst++;
+    }
+    text(F.bold, "Bibliothèque", sh.x + 26, sh.y + 20, 22, C_TEXT);
+    char sub[96];
+    snprintf(sub, sizeof sub, "%d pack%s · %d installé%s", U.packs.n, U.packs.n > 1 ? "s" : "", n_inst, n_inst > 1 ? "s" : "");
+    text(F.medium, sub, sh.x + 26, sh.y + 50, 12, C_DIM);
+    Rectangle close = {sh.x + sh.width - 54, sh.y + 20, 36, 36};
+    if (ui_icon_button("lib-close", close, icon_close, (Color){255, 255, 255, 18}, C_MUTED) || IsKeyPressed(KEY_ESCAPE)) {
+        U.lib_open = 0;
+        return;
+    }
+    static const char *filters[] = {"Tous", "En ligne", "Solo"};
+    ui_segmented("lib-filter", (Rectangle){close.x - 12 - 270, sh.y + 18, 270, 40}, filters, 3, &U.lib_filter);
+    ui_text_input("lib-search", (Rectangle){close.x - 12 - 270 - 12 - 220, sh.y + 18, 220, 40}, U.lib_query, sizeof U.lib_query,
+                  "Rechercher un pack…", 0);
+    DrawRectangle((int)sh.x + 1, (int)(sh.y + 76), (int)sh.width - 2, 1, C_BORDER);
+
+    /* grille de cartes (3 colonnes), défilante */
+    Rectangle view = {sh.x + 1, sh.y + 77, sh.width - 2, sh.height - 78};
+    const float gap = 14, cw = (view.width - 48 - 2 * gap) / 3, ch = 150;
+    int idx[256], n = 0;
+    for (int i = 0; i < U.packs.n && n < 256; i++) {
+        const pack *p = &U.packs.v[i];
+        if ((U.lib_filter == 1 && p->local) || (U.lib_filter == 2 && !p->local)) continue;
+        if (U.lib_query[0] && !contains_ci(p->name, U.lib_query)) continue;
+        idx[n++] = i;
+    }
+    float content = ((n + 2) / 3) * (ch + gap) + 24;
+    if (ui_mouse_in(view)) U.lib_scroll -= GetMouseWheelMove() * 50;
+    U.lib_scroll = fmaxf(0, fminf(U.lib_scroll, fmaxf(0, content - view.height)));
+    BeginScissorMode((int)view.x, (int)view.y, (int)view.width, (int)view.height);
+    if (!n) text_center(F.medium, U.packs.n ? "Aucun pack ne correspond." : "Aucun pack pour l'instant.", view, 14, C_MUTED);
+    for (int k = 0; k < n; k++) {
+        int i = idx[k];
+        const pack *p = &U.packs.v[i];
+        Rectangle c = {view.x + 24 + (k % 3) * (cw + gap), view.y + 18 + (k / 3) * (ch + gap) - U.lib_scroll, cw, ch};
+        char id[32];
+        snprintf(id, sizeof id, "lib-card-%d", i);
+        int hot = ui_mouse_in(c) && ui_mouse_in(view);
+        float h = ui_anim(id, hot ? 1.0f : 0.0f, 14);
+        Rectangle d = {c.x, c.y - 3 * h, c.width, c.height};
+        if (i == U.sel) glow(d, 18, with_alpha(C_ACCENT, 0.35f), 0, 14);
+        rrect(d, 18, (Color){255, 255, 255, 8});
+        /* bannière (ou dégradé + logo), en vignette */
+        Rectangle art = {d.x + 6, d.y + 6, d.width - 12, 94};
+        if (i < MAX_PACKS && U.gfx[i].has_banner) draw_cover(U.gfx[i].banner, art, WHITE);
+        else DrawRectangleGradientV((int)art.x, (int)art.y, (int)art.width, (int)art.height, (Color){34, 18, 52, 255}, (Color){12, 10, 22, 255});
+        DrawRectangleGradientV((int)art.x, (int)(art.y + art.height * 0.4f), (int)art.width, (int)(art.height * 0.6f), (Color){8, 8, 16, 0},
+                               (Color){8, 8, 16, 200});
+        draw_pack_logo(i, (Rectangle){art.x + 10, art.y + art.height - 46, 36, 36}, 10);
+        text_fit(F.black, p->name, art.x + 54, art.y + art.height - 38, 18, art.width - 64, C_TEXT);
+        char lbl[64], meta[96];
+        pack_loader_label(p, lbl, sizeof lbl);
+        snprintf(meta, sizeof meta, "%s · %s", lbl, p->mc_version);
+        text_fit(F.medium, meta, d.x + 14, d.y + 114, 12, d.width - 120, C_MUTED);
+        const char *st = p->local ? "Solo" : has_update(i) ? "Mise à jour" : i < MAX_PACKS && U.installed_rev[i] >= 0 ? "Installé" : "À installer";
+        Color stc = p->local ? (Color){110, 182, 255, 255} : has_update(i) ? C_ACCENT_HI : i < MAX_PACKS && U.installed_rev[i] >= 0 ? C_OK : C_MUTED;
+        float sw = measure(F.semibold, st, 11).x + 18;
+        Rectangle chip = {d.x + d.width - 14 - sw, d.y + 110, sw, 22};
+        rrect(chip, 11, with_alpha(stc, 0.15f));
+        text_center(F.semibold, st, chip, 11, stc);
+        rrect_lines(d, 18, i == U.sel ? 1.5f : 1, i == U.sel ? C_ACCENT : mix(C_BORDER, with_alpha(C_ACCENT, 0.5f), h));
+        if (hot) {
+            ui_hand();
+            if (ui_btn_released()) {
+                select_pack(i);
+                set_page(PAGE_HOME);
+                U.lib_open = 0;
+            }
+        }
+    }
+    EndScissorMode();
+    (void)n_on;
+    /* clic hors du panneau (sauf la bulle Bibliothèque) : fermeture */
+    if (ui_btn_released() && !CheckCollisionPointRec(ui_mouse_pos(), sh) &&
+        !CheckCollisionPointRec(ui_mouse_pos(), (Rectangle){0, ROW_Y, 214, ROW_H}))
+        U.lib_open = 0;
+}
+
 static void draw_home(const snapshot *s, float oy) {
     const pack *p = current_pack();
     if (!p) {
@@ -2068,7 +2391,9 @@ static void draw_home(const snapshot *s, float oy) {
         return;
     }
 
-    DrawRectangleGradientH(0, TITLE_H, 780 + SIDEBAR_W, WIN_H - TITLE_H, (Color){8, 8, 16, 230}, (Color){8, 8, 16, 0});
+    /* voile radial au centre (lecture du titre) */
+    DrawCircleGradient(WIN_W / 2, WIN_H / 2 - 20, 520, (Color){8, 8, 16, 120}, (Color){8, 8, 16, 0});
+    DrawRectangleGradientV(0, TITLE_H, WIN_W, 140, (Color){8, 8, 14, 150}, (Color){8, 8, 14, 0});
     log_k = ui_ease_out(ui_anim("log-panel", s->game_running || getenv("STROKA_LOGS") ? 1.0f : 0.0f, 6));
     float t = U.switch_t;
     if (U.switch_t < SW_TOTAL) U.switch_t += fminf(GetFrameTime(), 1.0f / 30);
@@ -2098,7 +2423,7 @@ static void draw_home(const snapshot *s, float oy) {
         static const float zero[EL_COUNT] = {0}, one[EL_COUNT] = {1, 1, 1, 1, 1};
         draw_pack_view(U.sel, oy, 1, zero, one);
     }
-    DrawRectangleGradientV(0, WIN_H - 260, WIN_W, 260, (Color){8, 8, 14, 0}, (Color){8, 8, 14, 240});
+    DrawRectangleGradientV(0, WIN_H - 220, WIN_W, 220, (Color){8, 8, 14, 0}, (Color){8, 8, 14, 225});
 
     if (switching) {
         draw_home_bar(s, U.prev_sel, oy + ody[EL_BAR], oal[EL_BAR], 0);
@@ -2106,6 +2431,9 @@ static void draw_home(const snapshot *s, float oy) {
     } else {
         draw_home_bar(s, U.sel, 0, 1, 1);
     }
+    draw_lib_split();
+    draw_profile(s);
+    draw_news_tab(1 - log_k);
     draw_log_panel(log_k);
 }
 
@@ -4436,6 +4764,12 @@ int main(void) {
             CR.open = 1;
             dev_page = NULL;
         }
+        if (dev_page && current_pack() && U.packs_state != 0 &&
+            (!strcmp(dev_page, "library") || !strcmp(dev_page, "playmenu") || !strcmp(dev_page, "plusmenu"))) {
+            if (!strcmp(dev_page, "library")) U.lib_open = 1; /* captures : panneau et menus de l'accueil */
+            else U.menu_open = !strcmp(dev_page, "playmenu") ? 1 : 2;
+            dev_page = NULL;
+        }
         if (dev_import && current_pack()) {
             dev_import = 0;
             U.page = PAGE_SETTINGS;
@@ -4458,7 +4792,7 @@ int main(void) {
         update_accent();
         update_key_refresh();
         ui_begin_frame(U.login_open || U.um_open || U.mig_open || U.sp_open || U.key_open || U.players_open || U.inst_open || U.uninst_open ||
-                       CR.open);
+                       CR.open || U.lib_open || U.menu_open);
         BeginDrawing();
         ClearBackground(C_BG);
         /* fond animé : thème du pack affiché (l'ancien pack tant que son fond n'est pas sorti) */
@@ -4495,6 +4829,11 @@ int main(void) {
         if (!U.login_open && (U.players_open || pl_appear > 0.02f)) draw_players_modal(&s, pl_appear);
         float key_appear = ui_anim("key-modal", U.key_open ? 1.0f : 0.0f, 12);
         if (!U.login_open && (U.key_open || key_appear > 0.02f)) draw_key_modal(key_appear);
+        if (U.page != PAGE_HOME) U.lib_open = 0, U.menu_open = 0;
+        float lib_appear = ui_anim("lib-sheet", U.lib_open ? 1.0f : 0.0f, 12);
+        if (!U.login_open && (U.lib_open || lib_appear > 0.02f)) draw_library_sheet(lib_appear);
+        if (!U.login_open) draw_menus(&s);
+        if (U.menu_open && IsKeyPressed(KEY_ESCAPE)) U.menu_open = 0;
         float cr_appear = ui_anim("crash-modal", CR.open ? 1.0f : 0.0f, 12);
         if (!U.login_open && (CR.open || cr_appear > 0.02f)) draw_crash_modal(cr_appear);
         ui_layer = 0;

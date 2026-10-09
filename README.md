@@ -82,9 +82,13 @@ jamais la clé `service_role` / `sb_secret_…`). Le schéma de la base est dans
   - un pack peut les **bloquer** :
     le dossier `mods` reste alors identique au pack (mods perso retirés, `.jar` déposés à la main mis de
     côté dans `.stroka/mods-desactives` et remis en place si l'option est réactivée).
-- **Une bulle de packs** à gauche, avec en haut une bascule **En ligne / Solo** ; en bas, le bouton clé
-  (packs en ligne) ou **+** (packs solo).
-- **Packs solo** : page d'édition façon admin (bouton **+**, ou crayon de la barre du bas) — onglet
+- **Accueil** : profil en haut à gauche (tête du skin, compte ; clic pour en changer), rail des icônes de
+  tous les packs à gauche (en ligne puis solo ; **+** : nouveau pack solo ou clé d'accès), pack choisi au
+  centre (titre, description, cartes Mods / Mémoire / Joueurs), et en bas la bulle **Bibliothèque**, la
+  barre d'infos (loader, versions, état, ou progression) et le bouton **Jouer ▾** (le menu ▾ : Mods,
+  Réglages, Dossier, Modifier le pack, Joueurs en ligne, Importer). La Bibliothèque montre tous les packs
+  (recherche, filtres Tous / En ligne / Solo). Boutique, actus et amis : affichés barrés, pour plus tard.
+- **Packs solo** : page d'édition façon admin (**+** du rail, ou « Modifier le pack » du menu ▾) — onglet
   *Général* (nom, description, icône, loader et versions, fond animé avec aperçus) et onglet *Mods*
   (recherche Modrinth filtrée sur la version du pack, `.jar`, liste filtrable avec icônes). Enregistrés sur
   l'ordinateur (`local_packs.json`) ; suppression depuis la même page.
