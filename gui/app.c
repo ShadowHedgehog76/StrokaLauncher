@@ -51,6 +51,7 @@
 #define RAIL_TOP (TITLE_H + 86)
 #define ROW_H 66
 #define ROW_Y (WIN_H - 22 - ROW_H)
+#define LIB_W 250.0f /* bulle Bibliothèque | boutique, partie visible (elle part du bord gauche) */
 #define RAIL_BOTTOM (ROW_Y - 16)
 #define MAX_PACKS 64
 
@@ -1623,7 +1624,7 @@ static Rectangle play_rect(void) { return (Rectangle){WIN_W - 24 - PLAY_W, ROW_Y
 static void draw_bar_content(const snapshot *s, int idx) {
     const pack *p = &U.packs.v[idx];
     Rectangle play = play_rect();
-    Rectangle bar = {226, ROW_Y, play.x - 12 - 226, ROW_H};
+    Rectangle bar = {LIB_W + 12, ROW_Y, play.x - 12 - (LIB_W + 12), ROW_H};
     rrect(bar, 22, (Color){18, 16, 30, 222});
     rrect_lines(bar, 22, 1, C_BORDER);
 
@@ -2155,22 +2156,24 @@ static void draw_profile(const snapshot *s) {
 
 /* Bulle du bas à gauche : Bibliothèque | boutique (bientôt, barrée) */
 static void draw_lib_split(void) {
-    Rectangle r = {-22, ROW_Y, 236, ROW_H};
+    Rectangle r = {-22, ROW_Y, LIB_W + 22, ROW_H};
     Rectangle main_r = {r.x, r.y, r.width - 58, r.height}, shop = {r.x + r.width - 58, r.y, 58, r.height};
     rrect(r, 22, (Color){18, 16, 30, 222});
     rrect_lines(r, 22, 1, C_BORDER);
     int hot = ui_mouse_in(main_r);
     float h = ui_anim("lib-main", hot || U.lib_open ? 1.0f : 0.0f, 14);
     if (h > 0.01f) {
-        BeginScissorMode((int)fmaxf(0, main_r.x), (int)main_r.y, (int)main_r.width, (int)main_r.height);
+        float x0 = fmaxf(0, main_r.x); /* la bulle part hors de l'écran : la zone éclaircie s'arrête au trait */
+        BeginScissorMode((int)x0, (int)main_r.y, (int)(main_r.x + main_r.width - x0), (int)main_r.height);
         rrect(r, 22, with_alpha(WHITE, 0.06f * h));
         EndScissorMode();
     }
-    Rectangle ib = {38, r.y + (r.height - 36) / 2, 36, 36};
-    if (U.lib_open) pill_gradient(ib, C_ACCENT, C_ACCENT2);
+    Rectangle ib = {20, r.y + (r.height - 36) / 2, 36, 36};
+    if (U.lib_open) rrect(ib, 12, mix(C_ACCENT, C_ACCENT2, 0.35f));
     else rrect(ib, 12, with_alpha(C_ACCENT, 0.14f + 0.08f * h));
     icon_grid_fn((Vector2){ib.x + 18, ib.y + 18}, 18, U.lib_open ? WHITE : C_ACCENT);
-    text(F.semibold, "Bibliothèque", ib.x + 48, r.y + (r.height - 18) / 2, 15, C_TEXT);
+    Vector2 lm = measure(F.semibold, "Bibliothèque", 15);
+    text(F.semibold, "Bibliothèque", ib.x + 50, r.y + (r.height - lm.y) / 2, 15, C_TEXT);
     if (hot) {
         ui_hand();
         if (ui_btn_released()) U.lib_open = !U.lib_open;
@@ -2380,7 +2383,7 @@ static void draw_library_sheet(float appear) {
     (void)n_on;
     /* clic hors du panneau (sauf la bulle Bibliothèque) : fermeture */
     if (ui_btn_released() && !CheckCollisionPointRec(ui_mouse_pos(), sh) &&
-        !CheckCollisionPointRec(ui_mouse_pos(), (Rectangle){0, ROW_Y, 214, ROW_H}))
+        !CheckCollisionPointRec(ui_mouse_pos(), (Rectangle){0, ROW_Y, LIB_W, ROW_H}))
         U.lib_open = 0;
 }
 
