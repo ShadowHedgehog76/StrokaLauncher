@@ -148,6 +148,7 @@ app: $(LAUNCHER)
 	cp $(LAUNCHER) $(APP)/Contents/MacOS/StrokaLauncher
 	sed -e 's/<string>1.0.0<\/string>/<string>$(PLIST_VERSION)<\/string>/' packaging/Info.plist > $(APP)/Contents/Info.plist
 	cp packaging/macos/icon.icns $(APP)/Contents/Resources/icon.icns
+	codesign --force --deep -s - --entitlements packaging/macos/launcher.entitlements $(APP)
 	@echo "Application créée : $(APP)"
 
 # Image disque macOS : l'app et un raccourci vers Applications (glisser-déposer)

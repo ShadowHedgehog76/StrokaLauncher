@@ -22,5 +22,8 @@
     <string>11.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <!-- Micro : demandé par Minecraft (Simple Voice Chat…), lancé par le launcher qui en est responsable pour macOS -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Minecraft a besoin du micro pour le chat vocal en jeu (Simple Voice Chat).</string>
 </dict>
 </plist>

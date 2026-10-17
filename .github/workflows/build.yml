@@ -49,7 +49,7 @@ jobs:
       - name: Application universelle
         run: |
           lipo -create StrokaLauncher ../x86_64/StrokaLauncher -output build/StrokaLauncher.app/Contents/MacOS/StrokaLauncher
-          codesign --force --deep -s - build/StrokaLauncher.app
+          codesign --force --deep -s - --entitlements packaging/macos/launcher.entitlements build/StrokaLauncher.app
           mkdir -p dist
           ditto -c -k --keepParent build/StrokaLauncher.app dist/StrokaLauncher-macOS.zip
 
